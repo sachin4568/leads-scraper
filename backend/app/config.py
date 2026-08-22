@@ -4,14 +4,29 @@ from functools import lru_cache
 from typing import Literal
 
 import boto3
-from pydantic import SecretStr
+from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing import Any
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=False)
 
-    app_env: Literal["local", "test", "production"] = "local"
+    app_env: Literal["local", "test", "production"] = "production"
+
+    @field_validator("app_env", mode="before")
+    @classmethod
+    def normalize_app_env(cls, value: Any) -> str:
+        if value is None:
+            return "production"
+        if isinstance(value, str):
+            val_str = value.strip()
+            if not val_str:
+                return "production"
+            if val_str not in {"local", "test", "production"}:
+                raise ValueError("APP_ENV must be one of: local, test, production")
+            return val_str
+        return value
     database_url: str = "postgresql+psycopg2://postgres:postgres@localhost:5432/lead_db"
     redis_url: SecretStr = SecretStr("redis://localhost:6379/0")
     celery_broker_url: str = "redis://localhost:6379/0"
@@ -71,4 +86,9 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    settings = Settings()
+    import sys
+    print(f"APP_ENV configured: {bool(settings.app_env)}", file=sys.stderr)
+    print(f"APP_ENV value category: {settings.app_env}", file=sys.stderr)
+    print(f"DATABASE_URL configured: {bool(settings.database_url)}", file=sys.stderr)
+    return settings
