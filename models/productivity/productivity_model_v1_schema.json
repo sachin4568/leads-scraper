@@ -1,0 +1,16 @@
+{
+  "features": [
+    "google_rating",
+    "review_count",
+    "phone_validity",
+    "website_state_active",
+    "source_record_count",
+    "location_consistency",
+    "contact_owner",
+    "small_business",
+    "niche_dental",
+    "geography_dehradun",
+    "genuineness_probability"
+  ],
+  "label": "final_productivity_outcome"
+}

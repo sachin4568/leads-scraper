@@ -1,0 +1,39 @@
+.env
+.env.*
+!.env.example
+
+# OS / System
+.DS_Store
+*.db
+
+# Caches and Store
+catboost_info/
+.pnpm-store/
+node_modules/
+.next/
+dist/
+build/
+
+# Local tooling
+.venv/
+.pre-commit-cache/
+.ruff_cache/
+*.egg-info/
+__pycache__/
+
+
+# ML models / generated artifacts
+*.cbm
+*.joblib
+*.pkl
+*.pickle
+
+# Training data / generated datasets
+*.xlsx
+*.csv
+
+# Archives
+*.zip
+
+# Generated reports / exports
+training_data/

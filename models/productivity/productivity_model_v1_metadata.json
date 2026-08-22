@@ -1,0 +1,18 @@
+{
+  "model_version": "productivity_model_v1",
+  "status": "CHALLENGER",
+  "training_dataset_hash": "d027f75408953daf8d52a6904306d4a0e72d28eb94e6c2cf472bb3787c0ba105",
+  "validation_dataset_hash": "4813d26453c20885f34e2a0c445cf17a698f7c7b026536fef75144556c0cb9c5",
+  "frozen_holdout_hash": "34f34d97497388e0834773ac6b8d51f56c60b4b72a50381bdd9955b48b472a13",
+  "best_operating_threshold": 0.2,
+  "validation_metrics": {
+    "best_threshold": 0.2,
+    "best_f1": 0.7872,
+    "best_precision": 0.6491,
+    "best_recall": 1.0,
+    "best_pr_auc": 0.7872,
+    "best_roc_auc": 0.7872,
+    "best_brier_score": 0.2551,
+    "tuning_partition": "VALIDATION_ONLY"
+  }
+}

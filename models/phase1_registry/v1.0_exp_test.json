@@ -1,0 +1,20 @@
+{
+  "model_name": "CatBoost_Phase1",
+  "model_version": "v1.0_exp_test",
+  "status": "EXPERIMENTAL",
+  "dataset_version": "v1.0",
+  "feature_version": "v1.0",
+  "training_timestamp": "2026-08-12 16:50:00",
+  "random_seed": 42,
+  "training_sample_count": 1000,
+  "positive_count": 800,
+  "negative_count": 200,
+  "validation_metrics": {
+    "f1": 0.88
+  },
+  "test_metrics": {
+    "f1": 0.87
+  },
+  "selected_threshold": 0.5,
+  "artifact_path": "/tmp/v1.0_exp_test.json"
+}

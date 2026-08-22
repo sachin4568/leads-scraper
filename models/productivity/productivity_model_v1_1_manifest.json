@@ -1,0 +1,19 @@
+{
+  "model_version": "productivity_model_v1_1",
+  "status": "CHALLENGER",
+  "training_dataset_hash": "38cc7e2ae9158a2c3a29a542c355d907d6e35e4906961009ae512c5a61cd81ce",
+  "validation_dataset_hash": "19fbb0723bd378cae00dc4460e7804b562b6b42f32a09daee555cdb9c9b7d466",
+  "frozen_holdout_hash": "574f2f8693a77065d525d978ef889cde0cad390d69977e0e1a5007fe5378e582",
+  "best_operating_threshold": 0.3,
+  "validation_metrics": {
+    "best_threshold": 0.3,
+    "best_f1": 1.0,
+    "best_precision": 1.0,
+    "best_recall": 1.0,
+    "best_specificity": 0.0,
+    "best_pr_auc": 1.0,
+    "best_roc_auc": 1.0,
+    "best_brier_score": 0.0,
+    "tuning_objective": "BALANCED_SPECIFICITY_PRECISION_OPTIMIZATION"
+  }
+}

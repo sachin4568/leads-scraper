@@ -1,0 +1,35 @@
+{
+  "model_name": "CatBoost_LightGBM_Ensemble_Phase1_Stratified",
+  "model_version": "v1.1_phase1_stratified",
+  "status": "EXPERIMENTAL",
+  "dataset_version": "dataset_v1.1_stratified",
+  "feature_version": "v1.0_allowlist",
+  "training_timestamp": "2026-08-16 09:56:28",
+  "random_seed": 42,
+  "training_sample_count": 6883,
+  "positive_count": 7959,
+  "negative_count": 646,
+  "validation_metrics": {
+    "best_alpha": 0.9,
+    "val_f1": 0.9631
+  },
+  "test_metrics": {
+    "accuracy": 0.9235,
+    "precision": 0.9632,
+    "recall": 0.9536,
+    "f1_score": 0.9584,
+    "roc_auc": 0.925,
+    "pr_auc": 0.915,
+    "fpr": 0.4394,
+    "fnr": 0.0464,
+    "not_genuine_precision": 0.5,
+    "not_genuine_recall": 0.5606,
+    "not_genuine_f1": 0.5286,
+    "tp": 760.0,
+    "fp": 29.0,
+    "fn": 37.0,
+    "tn": 37.0
+  },
+  "selected_threshold": 0.5,
+  "artifact_path": "/Users/sachinchaubey/Desktop/Leads/models/phase1_registry/v1.1_phase1_stratified.json"
+}

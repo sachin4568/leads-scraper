@@ -1,0 +1,17 @@
+{
+  "features": [
+    "genuineness_probability",
+    "google_rating",
+    "review_count",
+    "phone_validity",
+    "website_state_active",
+    "source_record_count",
+    "location_consistency",
+    "service_fit_score",
+    "digital_gap_score",
+    "commercial_intent_proxy",
+    "contactability_score",
+    "small_business"
+  ],
+  "label": "final_productivity_outcome"
+}

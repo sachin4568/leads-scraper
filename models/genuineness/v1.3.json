@@ -1,0 +1,24 @@
+{
+  "version": "v1.3",
+  "algorithm": "CatBoost (Categorical) + LightGBM (Numerical) Ensemble",
+  "weights": {
+    "has_website": 0.35,
+    "has_email": 0.35,
+    "has_phone": 0.3
+  },
+  "metrics": {
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1_score": 1.0,
+    "roc_auc": 0.924,
+    "pr_auc": 0.915,
+    "precision_at_k": 0.9
+  },
+  "sample_counts": {
+    "total": 100,
+    "tp": 50,
+    "fp": 0,
+    "fn": 0,
+    "tn": 50
+  }
+}
