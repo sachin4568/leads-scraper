@@ -21,11 +21,12 @@ class AuditLoggerMiddleware(BaseHTTPMiddleware):
         method = request.method.upper()
         path = request.url.path
 
-        # Log mutating requests or export endpoints if response was successful
+        # Log mutating requests, export endpoints, or security violations
         is_mutating = method in ("POST", "PATCH", "DELETE")
         is_export = "export" in path
+        is_security_event = response.status_code in (401, 403)
 
-        if (is_mutating or is_export) and response.status_code < 400:
+        if (is_mutating or is_export or is_security_event):
             auth_header = request.headers.get("Authorization")
             if auth_header and auth_header.startswith("Bearer "):
                 token = auth_header[7:].strip()
@@ -39,7 +40,10 @@ class AuditLoggerMiddleware(BaseHTTPMiddleware):
                         usr_id = uuid.UUID(user_id_str) if user_id_str else None
                         client_ip = request.client.host if request.client else "unknown"
 
-                        action_name = f"{method}_{path.strip('/').replace('/', '_').upper()}"
+                        if is_security_event:
+                            action_name = f"SECURITY_VIOLATION_{response.status_code}"
+                        else:
+                            action_name = f"{method}_{path.strip('/').replace('/', '_').upper()}"
 
                         with SessionLocal() as db:
                             log_entry = AuditLog(
@@ -48,7 +52,7 @@ class AuditLoggerMiddleware(BaseHTTPMiddleware):
                                 action=action_name[:64],
                                 resource=path[:120],
                                 ip_address=client_ip,
-                                payload={"status_code": response.status_code},
+                                payload={"status_code": response.status_code, "method": method},
                             )
                             db.add(log_entry)
                             db.commit()

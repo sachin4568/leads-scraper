@@ -1,0 +1,1 @@
+﻿from backend.app.database import SessionLocal; from backend.app.models import ScrapeJob; import uuid; db = SessionLocal(); job = ScrapeJob(workspace_id=uuid.uuid4(), niche="Plumbers", country="UK", target_lead_count=5); db.add(job); db.commit(); db.refresh(job); print("DB Target:", job.target_lead_count)

@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
-MODELS_DIR = Path("/Users/sachinchaubey/Desktop/Leads/models/genuineness")
+MODELS_DIR = Path(__file__).resolve().parent / "models" / "genuineness"
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
 

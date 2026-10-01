@@ -142,12 +142,12 @@ def test_timeout_retry_circuit_breaker() -> None:
     )
 
     # Trigger failures to open circuit
-    leads1 = connector.search_leads("cafe", location="London")
-    assert leads1 == []
+    with pytest.raises(Exception):
+        connector.search_leads("cafe", location="London")
     assert connector.failure_count == 1
 
-    leads2 = connector.search_leads("cafe", location="London")
-    assert leads2 == []
+    with pytest.raises(Exception):
+        connector.search_leads("cafe", location="London")
     assert connector.failure_count == 2
     assert connector.is_circuit_open() is True
 
@@ -262,3 +262,197 @@ def test_osm_overpass_integration() -> None:
             
         db.commit()
         db.close()
+
+
+def test_query_expansion_restaurant_and_category_support() -> None:
+    from backend.app.intelligence.query_expansion import QueryExpansionEngine
+    connector = OSMOverpassConnector()
+    engine = QueryExpansionEngine()
+
+    expansions = engine.expand_query("restaurant", max_queries=5)
+    query_terms = [e["query"] for e in expansions]
+
+    # Expected expansions
+    assert "restaurant" in query_terms
+    assert "restaurants" in query_terms
+    assert "cafe" in query_terms
+    assert "eatery" in query_terms
+    assert "bistro" in query_terms
+
+    # Check category support on connector
+    assert connector.supports_category("restaurant") is True
+    assert connector.supports_category("restaurants") is True
+    assert connector.supports_category("cafe") is True
+    assert connector.supports_category("eatery") is False
+    assert connector.supports_category("bistro") is False
+
+    # Check query builder raises on unsupported
+    bbox = [19.15, 19.16, 72.84, 72.85]
+    with pytest.raises(ValueError) as exc1:
+        connector._build_overpass_query("eatery", bbox)
+    assert "UNSUPPORTED_CATEGORY" in str(exc1.value)
+
+    with pytest.raises(ValueError) as exc2:
+        connector._build_overpass_query("bistro", bbox)
+    assert "UNSUPPORTED_CATEGORY" in str(exc2.value)
+
+
+@respx.mock
+def test_supported_vs_skipped_query_execution() -> None:
+    connector = OSMOverpassConnector()
+    bbox = [51.28676, 51.69187, -0.510375, 0.3340155]
+
+    # Mock Overpass endpoint for cafe query
+    respx.post("https://overpass-api.de/api/interpreter").mock(
+        return_value=Response(200, json={
+            "elements": [
+                {"type": "node", "id": 101, "tags": {"name": "Supported Cafe", "amenity": "cafe"}}
+            ]
+        })
+    )
+
+    # 1. Supported query executes successfully
+    leads = connector.search_leads("cafe", location="London")
+    assert len(leads) == 1
+    assert leads[0].business_name == "Supported Cafe"
+
+    # 2. Zero-result query succeeds with empty list
+    respx.post("https://overpass-api.de/api/interpreter").mock(
+        return_value=Response(200, json={"elements": []})
+    )
+    zero_leads = connector.search_leads("bakery", location="London")
+    assert zero_leads == []
+
+
+def test_deduplication_across_multiple_queries() -> None:
+    """Verifies that multiple category queries finding the same OSM element are deduplicated."""
+    db = SessionLocal()
+    resolver = LifecycleResolver()
+    from backend.app.models_phase2 import CanonicalLead, LeadObservation, LeadIdentity
+
+    name = "Dedup Test Resto"
+    osm_id = "node/88889999"
+
+    # Cleanup pre-test
+    db.query(LeadObservation).filter(LeadObservation.source_record_id == osm_id).delete()
+    db.query(LeadIdentity).filter(LeadIdentity.raw_signal == name).delete()
+    db.query(CanonicalLead).filter(CanonicalLead.business_name == name).delete()
+    db.commit()
+
+    try:
+        # Lead found by first query ('restaurant')
+        raw1 = RawLead(
+            source_name="osm_overpass",
+            source_record_id=osm_id,
+            business_name=name,
+            industry="restaurant",
+            address="123 Main Rd",
+            city="Mumbai",
+            country="India",
+            phone="+91 22 12345678",
+            website="https://deduptest.com",
+            raw_payload={"type": "node", "id": 88889999, "tags": {"name": name, "amenity": "restaurant"}},
+        )
+        c1, obs1, state1 = resolver.process_observation(db, raw1)
+        assert state1 == LifecycleState.NEW
+        assert c1 is not None
+
+        # Same lead found by second query ('restaurants' or 'cafe')
+        raw2 = RawLead(
+            source_name="osm_overpass",
+            source_record_id=osm_id,
+            business_name=name,
+            industry="restaurant",
+            address="123 Main Rd",
+            city="Mumbai",
+            country="India",
+            phone="+91 22 12345678",
+            website="https://deduptest.com",
+            raw_payload={"type": "node", "id": 88889999, "tags": {"name": name, "amenity": "restaurant"}},
+        )
+        c2, obs2, state2 = resolver.process_observation(db, raw2)
+        assert state2 == LifecycleState.DUPLICATE
+        assert c2.id == c1.id
+
+    finally:
+        db.query(LeadObservation).filter(LeadObservation.source_record_id == osm_id).delete()
+        db.query(LeadIdentity).filter(LeadIdentity.raw_signal == name).delete()
+        db.query(CanonicalLead).filter(CanonicalLead.business_name == name).delete()
+        db.commit()
+        db.close()
+
+
+def test_canonical_category_resolution() -> None:
+    connector = OSMOverpassConnector()
+    assert connector.get_canonical_category("restaurant") == "amenity=restaurant"
+    assert connector.get_canonical_category("restaurants") == "amenity=restaurant"
+    assert connector.get_canonical_category("cafe") == "amenity=cafe"
+    assert connector.get_canonical_category("dentist") == "amenity=dentist"
+    assert connector.get_canonical_category("dental clinic") == "amenity=dentist"
+    assert connector.get_canonical_category("eatery") is None
+    assert connector.get_canonical_category("bistro") is None
+
+
+@respx.mock
+def test_http_406_not_retried() -> None:
+    connector = OSMOverpassConnector()
+    route = respx.post("https://overpass-api.de/api/interpreter").mock(
+        return_value=Response(406, text="Not Acceptable")
+    )
+    with pytest.raises(ValueError) as exc:
+        connector._execute_query("test query")
+    assert "406" in str(exc.value)
+    # Must only attempt once (0 retries)
+    assert route.call_count == 1
+
+
+@respx.mock
+def test_http_429_retry_after_header_handling() -> None:
+    connector = OSMOverpassConnector()
+    route = respx.post("https://overpass-api.de/api/interpreter")
+    route.side_effect = [
+        Response(429, headers={"Retry-After": "1"}, json={"error": "rate limit"}),
+        Response(200, json={"elements": [{"type": "node", "id": 1, "tags": {"name": "After Rate Limit", "amenity": "cafe"}}]})
+    ]
+    leads = connector.search_leads("cafe", location="London")
+    assert len(leads) == 1
+    assert leads[0].business_name == "After Rate Limit"
+    assert route.call_count == 2
+
+
+@respx.mock
+def test_http_504_bounded_retry() -> None:
+    connector = OSMOverpassConnector()
+    route = respx.post("https://overpass-api.de/api/interpreter").mock(
+        return_value=Response(504, text="Gateway Timeout")
+    )
+    with pytest.raises(ValueError) as exc:
+        connector._execute_query("test query")
+    assert "504" in str(exc.value)
+    # Bounded to max_retries + 1 = 3 attempts total
+    assert route.call_count == 3
+
+
+def test_early_stopping_on_target_lead_count() -> None:
+    """Verifies that discovery stops once unique target leads count is reached."""
+    from unittest.mock import MagicMock
+    from backend.app.worker import execute_single_query_plan
+
+    mock_db = MagicMock()
+    mock_job = MagicMock()
+    mock_job.leads_scraped = 5
+    mock_job.target_lead_count = 5
+    mock_job.status = "RUNNING"
+
+    plan = {
+        "source": "osm_overpass",
+        "query": "restaurant",
+        "reason": "exact niche",
+        "location": "Mumbai",
+        "niche": "restaurant",
+    }
+    # Should early-stop and return without calling connector
+    execute_single_query_plan(mock_db, mock_job, plan)
+    assert mock_job.leads_scraped == 5
+
+

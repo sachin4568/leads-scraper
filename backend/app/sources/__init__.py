@@ -9,6 +9,7 @@ from backend.app.sources.linkedin import LinkedInConnector
 from backend.app.sources.meta import MetaConnector
 from backend.app.sources.rate_limiter import SourceRateLimiter
 from backend.app.sources.yelp import YelpConnector
+from backend.app.sources.nominatim import NominatimConnector
 from backend.app.sources.osm_overpass import OSMOverpassConnector
 
 __all__ = [

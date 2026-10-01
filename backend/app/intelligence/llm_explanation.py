@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
-import redis
+try:
+    import redis
+except ImportError:
+    redis = None
+
 from pydantic import BaseModel, Field
 
 from backend.app.config import get_settings
@@ -26,9 +31,14 @@ class LLMExplanationGenerator:
 
     def __init__(self) -> None:
         self.settings = get_settings()
-        self._redis = redis.Redis.from_url(
-            self.settings.redis_url.get_secret_value(), decode_responses=True
-        )
+        self._redis: Any = None
+        if redis and self.settings.redis_url:
+            try:
+                self._redis = redis.Redis.from_url(
+                    self.settings.redis_url.get_secret_value(), decode_responses=True
+                )
+            except Exception:
+                self._redis = None
 
     def check_and_consume_token_budget(
         self, workspace_id: str, estimated_tokens: int = 500, max_daily_budget: int = 50000

@@ -98,16 +98,23 @@ export function SidebarNavigation() {
         >{I.menu}</button>
       </div>
       <div style={{ flex: 1, overflow: 'auto', overflowX: 'hidden' }}>
-        <Section label="Leads" isExpanded={isExpanded}>
-          <NavItem href="/leads"      icon={I.users}   label="Leads" isExpanded={isExpanded} />
-          <NavItem href="/operations" icon={I.ops}     label="Operations" isExpanded={isExpanded} />
-          <NavItem href="/readings"   icon={I.file}    label="Readings" isPlus isExpanded={isExpanded} />
+        <Section label="Leads & Revenue Lifecycle" isExpanded={isExpanded}>
+          <NavItem href="/leads"            icon={I.users}   label="Leads" isExpanded={isExpanded} />
+          <NavItem href="/operations"       icon={I.ops}     label="Operations" isExpanded={isExpanded} />
+          <NavItem href="/operations/leads" icon={I.file}    label="Lead Operations" isExpanded={isExpanded} />
+          <NavItem href="/crm"              icon={I.grid}    label="CRM Pipeline" isExpanded={isExpanded} />
+          <NavItem href="/proposals"        icon={I.file}    label="Proposals & Quotes" isExpanded={isExpanded} />
+          <NavItem href="/delivery"         icon={I.monitor} label="Delivery & Projects" isExpanded={isExpanded} />
+          <NavItem href="/success"          icon={I.wave}    label="Customer Success & MRR" isExpanded={isExpanded} />
+          <NavItem href="/outreach"         icon={I.wave}    label="Outreach Funnel" isExpanded={isExpanded} />
         </Section>
-        <Section label="Intelligence" isExpanded={isExpanded}>
-          <NavItem href="/intelligence" icon={I.wave}    label="Intelligence" isExpanded={isExpanded} />
-          <NavItem href="/system"       icon={I.monitor} label="System" isExpanded={isExpanded} />
+        <Section label="Intelligence & Analytics" isExpanded={isExpanded}>
+          <NavItem href="/analytics"    icon={I.monitor} label="Executive Analytics" isExpanded={isExpanded} />
+          <NavItem href="/intelligence" icon={I.file}    label="Intelligence" isExpanded={isExpanded} />
+          <NavItem href="/system"       icon={I.circle}  label="System" isExpanded={isExpanded} />
         </Section>
         <Section label="System" isExpanded={isExpanded}>
+          <NavItem href="/operations/observability" icon={I.monitor} label="Observability & Health" isExpanded={isExpanded} />
           <NavItem href="/system/logic"     icon={I.circle} label="Logic" isExpanded={isExpanded} />
           <NavItem href="/system/settings"  icon={I.gear}   label="Lead Settings" isExpanded={isExpanded} />
           <NavItem href="/system/lamicales" icon={I.table}  label="Lamicales" isExpanded={isExpanded} />

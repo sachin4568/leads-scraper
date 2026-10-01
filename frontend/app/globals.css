@@ -62,9 +62,10 @@ html, body {
   -webkit-font-smoothing: antialiased;
 }
 
-::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.09); border-radius: 4px; }
+::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.16); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.28); }
 
 ::selection { background: rgba(236,72,153,0.22); color: #fff; }
 
@@ -74,6 +75,8 @@ html, body {
 
 input, textarea, select, button { font-family: inherit; font-size: 13px; }
 button { cursor: pointer; border: none; background: none; color: inherit; }
+select { cursor: pointer; color: var(--text-1); }
+select option { background: #FAF9F6; color: #111827; }
 a { color: inherit; text-decoration: none; }
 table { border-collapse: collapse; width: 100%; }
 
@@ -96,8 +99,27 @@ table { border-collapse: collapse; width: 100%; }
   background: var(--bg-input); border: 1px solid var(--border-subtle); color: var(--text-2);
 }
 .btn-ghost:hover { background: var(--bg-hover); color: var(--text-1); }
+.btn-outline {
+  background: transparent; border: 1px solid var(--border-subtle); color: var(--text-2);
+}
+.btn-outline:hover { background: var(--bg-hover); color: var(--text-1); }
 .btn-pink {
   background: var(--pink); border: 1px solid transparent; color: #fff; font-weight: 600;
 }
 .btn-pink:hover { opacity: 0.85; }
+.btn-danger {
+  background: var(--red); border: 1px solid transparent; color: #fff; font-weight: 600;
+}
+.btn-danger:hover { opacity: 0.88; }
 .btn-sm { height: 30px; padding: 0 12px; font-size: 12px; }
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.5;
+    transform: scale(1.15);
+  }
+}

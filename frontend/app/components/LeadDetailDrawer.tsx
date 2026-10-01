@@ -2,11 +2,25 @@
 import { Lead, ServiceType, SERVICE_LABELS } from '../lib/data';
 
 const SC: Record<string,{bg:string;text:string}> = {
-  new:{bg:'rgba(148,163,184,.12)',text:'#94a3b8'},assigned:{bg:'rgba(96,165,250,.12)',text:'#60a5fa'},
-  called:{bg:'rgba(245,158,11,.12)',text:'#fbbf24'},warm:{bg:'rgba(236,72,153,.15)',text:'#f472b6'},converted:{bg:'rgba(34,197,94,.12)',text:'#4ade80'},
+  new:{bg:'rgba(148,163,184,.12)',text:'#94a3b8'},
+  reviewed:{bg:'rgba(168,85,247,.12)',text:'#a855f7'},
+  assigned:{bg:'rgba(96,165,250,.12)',text:'#60a5fa'},
+  called:{bg:'rgba(245,158,11,.12)',text:'#fbbf24'},
+  contacted:{bg:'rgba(96,165,250,.12)',text:'#60a5fa'},
+  warm:{bg:'rgba(236,72,153,.15)',text:'#f472b6'},
+  qualified:{bg:'rgba(34,197,94,.12)',text:'#4ade80'},
+  converted:{bg:'rgba(34,197,94,.12)',text:'#4ade80'},
+  lost:{bg:'rgba(239,68,68,.12)',text:'#ef4444'},
+  dismissed:{bg:'rgba(148,163,184,.12)',text:'#94a3b8'},
+};
+
+const getStatusBadge = (status?: string) => {
+  const key = (status || 'new').toLowerCase().trim();
+  return SC[key] || { bg:'rgba(148,163,184,.12)', text:'#94a3b8' };
 };
 
 export function LeadDetailDrawer({ lead, service, onClose }: { lead: Lead; service: ServiceType; onClose: () => void }) {
+  const statusBadge = getStatusBadge(lead.status);
   return (
     <>
       <div onClick={onClose} style={{ position:'fixed',inset:0,zIndex:200 }} />
@@ -17,7 +31,7 @@ export function LeadDetailDrawer({ lead, service, onClose }: { lead: Lead; servi
             <div style={{ fontSize:'14px',fontWeight:700,color:'var(--text-1)',marginBottom:3 }}>{lead.businessName}</div>
             <div style={{ display:'flex',alignItems:'center',gap:6 }}>
               <span style={{ fontFamily:'monospace',fontSize:'10px',color:'var(--text-3)' }}>{lead.leadId}</span>
-              <span className="pill" style={{ background:SC[lead.status].bg,color:SC[lead.status].text,textTransform:'capitalize',fontSize:'9px' }}>{lead.status}</span>
+              <span className="pill" style={{ background:statusBadge.bg,color:statusBadge.text,textTransform:'capitalize',fontSize:'9px' }}>{lead.status || 'New'}</span>
             </div>
           </div>
           <button onClick={onClose} style={{ width:28,height:28,display:'flex',alignItems:'center',justifyContent:'center',borderRadius:'var(--r-md)',color:'var(--text-3)' }}
@@ -101,3 +115,6 @@ function Score({ label, value, color }: { label:string; value:string; color:stri
     </div>
   );
 }
+
+// TODO: Render enrichment_state and opportunities panels here
+

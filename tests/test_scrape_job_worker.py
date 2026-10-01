@@ -138,9 +138,14 @@ def test_process_scrape_job_task_execution_and_deduplication(test_db_session) ->
     test_db_session.commit()
     test_db_session.refresh(job2)
 
+
+
     with patch("backend.app.sources.google_maps.GoogleMapsConnector", return_value=mock_connector):
         process_scrape_job_task(str(job2.id))
 
     test_db_session.refresh(job2)
-    assert job2.status == "PARTIAL"
+    # With the target enforcement fix, 0/10 leads must be FAILED, never PARTIAL
+    assert job2.status == "FAILED", (
+        f"Expected FAILED when 0/{job2.target_lead_count} leads scraped (all were deduped source_ids), got {job2.status}"
+    )
     assert job2.leads_scraped == 0  # No new leads ingested due to source_id deduplication

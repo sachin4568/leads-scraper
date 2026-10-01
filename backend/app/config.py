@@ -12,21 +12,17 @@ from typing import Any
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=False)
 
-    app_env: Literal["local", "test", "production"] = "production"
+    app_env: Literal["local", "test", "production"] = "local"
 
-    @field_validator("app_env", mode="before")
+    WATCHDOG_TIMEOUT_SECONDS: int = 900  # default 15 minutes
+    @field_validator("WATCHDOG_TIMEOUT_SECONDS", mode="before")
     @classmethod
-    def normalize_app_env(cls, value: Any) -> str:
-        if value is None:
-            return "production"
-        if isinstance(value, str):
-            val_str = value.strip()
-            if not val_str:
-                return "production"
-            if val_str not in {"local", "test", "production"}:
-                raise ValueError("APP_ENV must be one of: local, test, production")
-            return val_str
-        return value
+    def validate_watchdog_timeout(cls, value: Any) -> int:
+        try:
+            return int(value)
+        except Exception:
+            raise ValueError("WATCHDOG_TIMEOUT_SECONDS must be an integer")
+
     database_url: str = "postgresql+psycopg2://postgres:postgres@localhost:5432/lead_db"
     redis_url: SecretStr = SecretStr("redis://localhost:6379/0")
     celery_broker_url: str = "redis://localhost:6379/0"

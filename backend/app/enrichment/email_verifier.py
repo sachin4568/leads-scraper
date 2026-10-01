@@ -112,3 +112,39 @@ class EmailVerifier:
             domain=domain,
             domain_matched=domain_matched,
         )
+
+# Phase 3 Abstraction
+class EmailVerifierProvider:
+    def verify(self, email: str) -> str:
+        raise NotImplementedError
+
+class DummyEmailVerifier(EmailVerifierProvider):
+    def __init__(self):
+        self.internal_verifier = EmailVerifier()
+        
+    def verify(self, email: str) -> str:
+        try:
+            res = self.internal_verifier.verify(email)
+            if not res.syntax_valid:
+                return "INVALID"
+            if res.is_disposable:
+                return "INVALID"
+            if not res.has_mx_records:
+                return "UNKNOWN" # DNS failures could be network/timeout issues locally
+                
+            # We only checked Syntax and DNS, we did not verify the mailbox via SMTP or API.
+            # So the strongest claim we can make is LIKELY_VALID.
+            return "LIKELY_VALID" if res.is_valid else "UNKNOWN"
+        except Exception as e:
+            logger.warning(f"Verification exception for {email}: {e}")
+            return "UNKNOWN"
+
+def get_email_verifier() -> EmailVerifierProvider:
+    return DummyEmailVerifier()
+
+def verify_email(email: str) -> str:
+    try:
+        return get_email_verifier().verify(email)
+    except Exception as e:
+        logger.warning(f"Email verification failed: {e}")
+        return "UNKNOWN"

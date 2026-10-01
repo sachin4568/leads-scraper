@@ -139,10 +139,11 @@ const renderLeadCells = (lead: Lead, svc: ServiceType, idx: number) => {
   );
 }
 
-export function LeadSheetModal({ sheet, onClose }: { sheet: LeadSheet; onClose: () => void }) {
+export function LeadSheetModal({ sheet, onClose, initialFullScreen = false }: { sheet: LeadSheet; onClose: () => void; initialFullScreen?: boolean }) {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [selected, setSelected] = useState<Lead|null>(null);
+  const [isFullScreen, setIsFullScreen] = useState<boolean>(initialFullScreen);
 
   const filtered = useMemo(() => sheet.leads.filter(l => {
     const q = search.toLowerCase();
@@ -186,10 +187,31 @@ export function LeadSheetModal({ sheet, onClose }: { sheet: LeadSheet; onClose: 
   return (
     <>
       <div onClick={onClose} style={{ position:'fixed',inset:0,background:'rgba(0,0,0,.72)',backdropFilter:'blur(5px)',zIndex:100 }} />
-      <div style={{ position:'fixed',top:'50%',left:'50%',transform:'translate(-50%,-50%)',width:'min(94vw,1100px)',maxHeight:'88vh',background:'var(--bg-elevated)',border:'1px solid var(--border-subtle)',borderRadius:'var(--r-2xl)',zIndex:101,display:'flex',flexDirection:'column',overflow:'hidden',boxShadow:'0 40px 100px rgba(0,0,0,.65)' }}>
+      <div style={{
+        position:'fixed',
+        top: isFullScreen ? 0 : '50%',
+        left: isFullScreen ? 0 : '50%',
+        transform: isFullScreen ? 'none' : 'translate(-50%,-50%)',
+        width: isFullScreen ? '100vw' : 'min(94vw,1100px)',
+        height: isFullScreen ? '100vh' : 'auto',
+        maxHeight: isFullScreen ? '100vh' : '88vh',
+        background:'var(--bg-elevated)',
+        border: isFullScreen ? 'none' : '1px solid var(--border-subtle)',
+        borderRadius: isFullScreen ? 0 : 'var(--r-2xl)',
+        zIndex:101,
+        display:'flex',
+        flexDirection:'column',
+        overflow:'hidden',
+        boxShadow: isFullScreen ? 'none' : '0 40px 100px rgba(0,0,0,.65)',
+        transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)'
+      }}>
 
         {/* ── Header ── */}
-        <div style={{ padding:'20px 24px',borderBottom:'1px solid var(--border-faint)',display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:16,flexShrink:0 }}>
+        <div
+          onDoubleClick={() => setIsFullScreen(f => !f)}
+          title="Double click to toggle fullscreen"
+          style={{ padding:'20px 24px',borderBottom:'1px solid var(--border-faint)',display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:16,flexShrink:0,cursor:'pointer' }}
+        >
           <div style={{ flex:1,minWidth:0 }}>
             <div style={{ display:'flex',alignItems:'center',gap:10,flexWrap:'wrap',marginBottom:4 }}>
               <span style={{ fontSize:'15px',fontWeight:700,color:'var(--text-1)' }}>{sheet.name}</span>
@@ -201,7 +223,7 @@ export function LeadSheetModal({ sheet, onClose }: { sheet: LeadSheet; onClose: 
             </div>
           </div>
           {/* Stats */}
-          <div style={{ display:'flex',alignItems:'center',gap:10,flexShrink:0 }}>
+          <div style={{ display:'flex',alignItems:'center',gap:10,flexShrink:0 }} onClick={e => e.stopPropagation()}>
             {[{l:'Total',v:total,c:'var(--text-1)'},{l:'Warm',v:warm,c:'var(--pink-light)'},{l:'Converted',v:conv,c:'var(--green)'}].map(s=>(
               <div key={s.l} style={{ background:'var(--bg-card)',border:'1px solid var(--border-subtle)',borderRadius:'var(--r-lg)',padding:'8px 16px',textAlign:'center',minWidth:64 }}>
                 <div style={{ fontSize:'18px',fontWeight:700,color:s.c }}>{s.v}</div>
@@ -223,8 +245,26 @@ export function LeadSheetModal({ sheet, onClose }: { sheet: LeadSheet; onClose: 
                 </a>
               )}
             </div>
+            {/* Fullscreen Toggle Button */}
+            <button
+              onClick={() => setIsFullScreen(f => !f)}
+              title={isFullScreen ? "Exit Fullscreen" : "Fullscreen"}
+              style={{ width:30,height:30,display:'flex',alignItems:'center',justifyContent:'center',borderRadius:'var(--r-md)',color:'var(--text-3)',marginLeft:4,cursor:'pointer' }}
+              onMouseEnter={e=>(e.currentTarget.style.background='var(--bg-hover)')}
+              onMouseLeave={e=>(e.currentTarget.style.background='transparent')}
+            >
+              {isFullScreen ? (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/>
+                </svg>
+              ) : (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>
+                </svg>
+              )}
+            </button>
             {/* Close */}
-            <button onClick={onClose} style={{ width:30,height:30,display:'flex',alignItems:'center',justifyContent:'center',borderRadius:'var(--r-md)',color:'var(--text-3)',marginLeft:4 }}
+            <button onClick={onClose} style={{ width:30,height:30,display:'flex',alignItems:'center',justifyContent:'center',borderRadius:'var(--r-md)',color:'var(--text-3)',marginLeft:4,cursor:'pointer' }}
               onMouseEnter={e=>(e.currentTarget.style.background='var(--bg-hover)')}
               onMouseLeave={e=>(e.currentTarget.style.background='transparent')}
             >

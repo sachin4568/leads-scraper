@@ -2,14 +2,30 @@
 
 import { useState } from 'react';
 
+import { useRouter } from 'next/navigation';
+
 interface Props {
   onSegregate: () => void;
   isSegregating: boolean;
+  onStartScrape?: (params: { niche: string; city: string }) => void;
+  isScraping?: boolean;
 }
 
-export function ScrapeControls({ onSegregate, isSegregating }: Props) {
+export function ScrapeControls({ onSegregate, isSegregating, onStartScrape, isScraping }: Props) {
   const [niche, setNiche] = useState('');
   const [city, setCity] = useState('');
+  const router = useRouter();
+
+  const handleStart = () => {
+    if (onStartScrape) {
+      onStartScrape({ niche: niche.trim(), city: city.trim() });
+    } else {
+      const params = new URLSearchParams();
+      if (niche.trim()) params.set('niche', niche.trim());
+      if (city.trim()) params.set('city', city.trim());
+      router.push(`/operations?${params.toString()}`);
+    }
+  };
 
   return (
     <div style={{
@@ -36,6 +52,7 @@ export function ScrapeControls({ onSegregate, isSegregating }: Props) {
           placeholder="Niche (e.g. Restaurants)"
           value={niche}
           onChange={e => setNiche(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') handleStart(); }}
           style={{ flex: 1, background: 'none', border: 'none', outline: 'none', color: 'var(--text-primary)', fontSize: '13px' }}
         />
       </div>
@@ -58,23 +75,28 @@ export function ScrapeControls({ onSegregate, isSegregating }: Props) {
           placeholder="City / Region"
           value={city}
           onChange={e => setCity(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') handleStart(); }}
           style={{ flex: 1, background: 'none', border: 'none', outline: 'none', color: 'var(--text-primary)', fontSize: '13px' }}
         />
       </div>
 
       {/* Scrape button */}
-      <button style={{
-        display: 'flex', alignItems: 'center', gap: '7px',
-        padding: '0 18px', height: '38px',
-        background: 'var(--bg-glass)',
-        border: '1px solid var(--border-glass)',
-        borderRadius: 'var(--radius-md)',
-        color: 'var(--text-secondary)',
-        fontSize: '13px', fontWeight: 500,
-        cursor: 'pointer',
-        whiteSpace: 'nowrap',
-        transition: 'background var(--transition), color var(--transition)',
-      }}
+      <button 
+        onClick={handleStart}
+        disabled={isScraping}
+        style={{
+          display: 'flex', alignItems: 'center', gap: '7px',
+          padding: '0 18px', height: '38px',
+          background: 'var(--bg-glass)',
+          border: '1px solid var(--border-glass)',
+          borderRadius: 'var(--radius-md)',
+          color: 'var(--text-secondary)',
+          fontSize: '13px', fontWeight: 500,
+          cursor: isScraping ? 'not-allowed' : 'pointer',
+          whiteSpace: 'nowrap',
+          transition: 'background var(--transition), color var(--transition)',
+          opacity: isScraping ? 0.7 : 1,
+        }}
         onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'var(--bg-glass-hover)'; (e.currentTarget as HTMLElement).style.color = 'var(--text-primary)'; }}
         onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'var(--bg-glass)'; (e.currentTarget as HTMLElement).style.color = 'var(--text-secondary)'; }}
       >
@@ -83,7 +105,7 @@ export function ScrapeControls({ onSegregate, isSegregating }: Props) {
           <line x1="12" y1="8" x2="12" y2="16"/>
           <line x1="8" y1="12" x2="16" y2="12"/>
         </svg>
-        Start Scrape
+        {isScraping ? 'Starting...' : 'Start Scrape'}
       </button>
 
       {/* Segregate button — pink accent */}

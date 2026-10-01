@@ -21,6 +21,10 @@ STATIC_CITY_BBOXES: dict[str, list[float]] = {
     "leeds": [53.743, 53.928, -1.683, -1.411],
     "delhi": [28.40, 28.88, 76.84, 77.35],
     "new delhi": [28.40, 28.88, 76.84, 77.35],
+    "mumbai": [18.89, 19.27, 72.77, 72.98],
+    "goregaon": [19.1498688, 19.1798688, 72.8345492, 72.8645492],
+    "goregaon, mumbai": [19.1498688, 19.1798688, 72.8345492, 72.8645492],
+    "goregaon, mumbai, india": [19.1498688, 19.1798688, 72.8345492, 72.8645492],
 }
 
 
@@ -44,23 +48,43 @@ class SubdivisionManager:
     """Handles location geocoding, grid cell subdivision, and cell coordinate/radius calculation."""
 
     @staticmethod
-    def geocode_location(location: str) -> list[float] | None:
+    def geocode_location(location: str, country_code: str | None = None, region: str | None = None) -> list[float] | None:
         """Resolves location query string to a bounding box: [lat_min, lat_max, lon_min, lon_max]."""
-        loc_clean = location.lower().strip()
+        from backend.app.ingestion.canonical_location import DISAMBIGUATION_MAP, COUNTRY_BOUNDING_BOXES
 
-        # 1. Check static city database cache
+        loc_clean = location.lower().strip()
+        cc = (country_code or "GB").upper()
+
+        # 1. Check Disambiguation Map first for exact city + country
+        disambig = DISAMBIGUATION_MAP.get((loc_clean, cc))
+        if disambig and "bbox" in disambig:
+            logger.info(f"[Geocoder] Resolved {location} ({cc}) from contextual disambiguation map.")
+            return disambig["bbox"]
+
+        # 2. Check static city database cache
         for city, bbox in STATIC_CITY_BBOXES.items():
-            if city in loc_clean or loc_clean in city:
+            if city == loc_clean:
                 logger.info(f"[Geocoder] Resolved {location} from static city cache.")
                 return bbox
 
-        # 2. Try Nominatim Geocoder API
+        for city, bbox in STATIC_CITY_BBOXES.items():
+            if city in loc_clean or loc_clean in city:
+                logger.info(f"[Geocoder] Resolved {location} from static city cache match.")
+                return bbox
+
+        # 3. Try Nominatim Geocoder API with countrycodes filter
         try:
             url = "https://nominatim.openstreetmap.org/search"
             headers = {"User-Agent": "LeadIntelligencePlatform/1.0 (info@leadsplatform.com)"}
-            params = {"q": location, "format": "json", "limit": 1}
+            query_parts = [location]
+            if region: query_parts.append(region)
+            if country_code: query_parts.append(country_code)
+            query_str = ", ".join(query_parts)
+            params = {"q": query_str, "format": "json", "limit": 1}
+            if country_code:
+                params["countrycodes"] = country_code.lower()
 
-            logger.info(f"[Geocoder] Querying Nominatim for location: {location}")
+            logger.info(f"[Geocoder] Querying Nominatim for location: {query_str}")
             with httpx.Client(timeout=6.0) as client:
                 resp = client.get(url, params=params, headers=headers)
                 if resp.status_code == 200:
@@ -68,18 +92,30 @@ class SubdivisionManager:
                     if results:
                         bbox_str = results[0].get("boundingbox")
                         if bbox_str and len(bbox_str) == 4:
-                            resolved_bbox = [
-                                float(bbox_str[0]),
-                                float(bbox_str[1]),
-                                float(bbox_str[2]),
-                                float(bbox_str[3]),
-                            ]
+                            lat_min = float(bbox_str[0])
+                            lat_max = float(bbox_str[1])
+                            lon_min = float(bbox_str[2])
+                            lon_max = float(bbox_str[3])
+                            
+                            # Expand narrow or point-level coordinates to at least 10km radius
+                            if (lat_max - lat_min) < 0.08 or (lon_max - lon_min) < 0.08:
+                                lat_mid = (lat_min + lat_max) / 2.0
+                                lon_mid = (lon_min + lon_max) / 2.0
+                                lat_min = max(-90.0, lat_mid - 0.04)
+                                lat_max = min(90.0, lat_mid + 0.04)
+                                lon_min = max(-180.0, lon_mid - 0.04)
+                                lon_max = min(180.0, lon_mid + 0.04)
+
+                            resolved_bbox = [lat_min, lat_max, lon_min, lon_max]
                             logger.info(f"[Geocoder] Resolved bounding box from Nominatim: {resolved_bbox}")
                             return resolved_bbox
         except Exception as e:
             logger.warning(f"[Geocoder] Nominatim lookup failed: {e}")
 
-        # Fallback to London bounds
+        # Fallback to country bounding box or default
+        if country_code and country_code.upper() in COUNTRY_BOUNDING_BOXES:
+            return COUNTRY_BOUNDING_BOXES[country_code.upper()]
+
         logger.warning(f"[Geocoder] Failed to geocode location '{location}'. Falling back to London bounds.")
         return STATIC_CITY_BBOXES["london"]
 

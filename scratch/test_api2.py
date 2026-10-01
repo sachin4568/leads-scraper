@@ -1,0 +1,1 @@
+﻿from fastapi.testclient import TestClient; from backend.app.main import app; client = TestClient(app); response = client.post("/api/v1/scrape-jobs", json={"niche": "Medspa", "city": "Manchester", "target_lead_count": 5}); print(response.status_code); print(response.json())

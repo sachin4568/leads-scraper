@@ -26,20 +26,18 @@ const formatDate = (dateStr: string) => {
 const getCountryRegion = (sheet: any) => {
   if (sheet.country_region) return sheet.country_region;
   if (sheet.region && sheet.country) return `${sheet.region}, ${sheet.country}`;
-  if (sheet.name.toLowerCase().includes('nyc') || sheet.name.toLowerCase().includes('new york')) return 'New York, US';
-  if (sheet.name.toLowerCase().includes('sf') || sheet.name.toLowerCase().includes('san francisco')) return 'San Francisco, US';
-  if (sheet.name.toLowerCase().includes('chicago')) return 'Chicago, US';
-  if (sheet.name.toLowerCase().includes('austin')) return 'Austin, US';
-  if (sheet.name.toLowerCase().includes('london')) return 'London, UK';
-  return 'London, UK';
+  if (sheet.country) return sheet.country;
+  if (sheet.region) return sheet.region;
+  return '—';
 };
 
 export default function LeadsPage() {
   const [sheets, setSheets] = useState<LeadSheet[]>([]);
   const [search, setSearch] = useState('');
-  const [openSheet, setOpenSheet]     = useState<LeadSheet|null>(null);
-  const [detailSheet, setDetailSheet] = useState<LeadSheet|null>(null);
-  const [editSheet, setEditSheet]     = useState<LeadSheet|null>(null);
+  const [openSheet, setOpenSheet]         = useState<LeadSheet|null>(null);
+  const [openFullScreen, setOpenFullScreen] = useState<boolean>(false);
+  const [detailSheet, setDetailSheet]     = useState<LeadSheet|null>(null);
+  const [editSheet, setEditSheet]         = useState<LeadSheet|null>(null);
 
   // Filter & Sort state
   const [sortField, setSortField] = useState<'none' | 'name' | 'sheetId' | 'leadCount'>('none');
@@ -312,7 +310,9 @@ export default function LeadsPage() {
               ) : displayed.map((sheet,i)=>{
                 return (
                   <tr key={sheet.id}
-                    onClick={()=>setOpenSheet(sheet)}
+                    onClick={() => { setOpenSheet(sheet); setOpenFullScreen(false); }}
+                    onDoubleClick={() => { setOpenSheet(sheet); setOpenFullScreen(true); }}
+                    title="Click to open · Double-click for full screen"
                     style={{
                       borderBottom: i < displayed.length - 1 ? '1px solid var(--border-faint)' : 'none',
                       cursor: 'pointer',
@@ -372,7 +372,7 @@ export default function LeadsPage() {
         </div>
       </div>
 
-      {openSheet  && <LeadSheetModal sheet={openSheet} onClose={()=>setOpenSheet(null)} />}
+      {openSheet  && <LeadSheetModal sheet={openSheet} initialFullScreen={openFullScreen} onClose={()=>setOpenSheet(null)} />}
       {detailSheet && <SheetDetailsModal sheet={detailSheet} onClose={()=>setDetailSheet(null)} />}
       {editSheet  && <EditSheetModal sheet={editSheet} onClose={()=>setEditSheet(null)} onSave={(n,u)=>saveSheet(editSheet.id,n,u)} />}
     </div>

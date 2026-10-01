@@ -1,34 +1,27 @@
 from __future__ import annotations
 
 import logging
-
-from celery import Celery
-
+from typing import Any
 from backend.app.config import get_settings
 
 logger = logging.getLogger(__name__)
-
 settings = get_settings()
 
-
 def get_broker_url() -> str:
-    url = settings.redis_url.get_secret_value()
-    try:
-        import redis
+    return "sqla+" + settings.database_url
 
-        r = redis.Redis.from_url(url, socket_timeout=0.5, socket_connect_timeout=0.5)
-        r.ping()
-        return url
-    except Exception:
-        logger.warning(
-            "Redis connection refused on %s. Falling back to in-memory Celery broker (memory://).",
-            url,
-        )
-        return "memory://"
-
-
-celery_app = Celery("lead_intelligence", broker=get_broker_url())
-celery_app.conf.update(task_acks_late=True, task_reject_on_worker_lost=True)
+try:
+    from celery import Celery
+    celery_app = Celery("lead_intelligence", broker=get_broker_url())
+    celery_app.conf.update(task_acks_late=True, task_reject_on_worker_lost=True)
+except (ImportError, Exception):
+    class DummyCelery:
+        def task(self, *args, **kwargs):
+            def decorator(f):
+                f.delay = f
+                return f
+            return decorator
+    celery_app = DummyCelery()
 
 
 @celery_app.task(bind=True, ignore_result=True)
@@ -49,6 +42,47 @@ def sync_leads_to_google_sheets_task(
 
     service = GoogleSheetsSyncService(token_info)
     return service.sync_leads(spreadsheet_id, sheet_name, rows)
+
+
+def _upsert_evidence_record(
+    db: Any,
+    workspace_id: Any,
+    lead_id: Any,
+    canonical_lead_id: str | None,
+    field_name: str,
+    status: str,
+    confidence_score: int,
+    source: str,
+    details: dict[str, Any] | None,
+) -> EvidenceRecord:
+    from sqlalchemy import select
+    from backend.app.models import EvidenceRecord
+
+    ev = db.scalar(
+        select(EvidenceRecord).where(
+            EvidenceRecord.lead_id == lead_id,
+            EvidenceRecord.field_name == field_name,
+        )
+    )
+    if ev:
+        ev.status = status
+        ev.confidence_score = confidence_score
+        ev.source = source
+        ev.details = details
+        ev.canonical_lead_id = canonical_lead_id
+    else:
+        ev = EvidenceRecord(
+            workspace_id=workspace_id,
+            lead_id=lead_id,
+            canonical_lead_id=canonical_lead_id,
+            field_name=field_name,
+            status=status,
+            confidence_score=confidence_score,
+            source=source,
+            details=details,
+        )
+        db.add(ev)
+    return ev
 
 
 def generate_search_plan(niche: str, location: str | None) -> list[str]:
@@ -209,6 +243,13 @@ def execute_single_query_plan(db, job, plan) -> None:
     if not connector:
         return
 
+    if hasattr(connector, "supports_category") and not connector.supports_category(query_term):
+        logger.info(
+            f"[QueryPlan] Traceability: original_query='{plan.get('niche', job.niche)}' expanded_query='{query_term}' "
+            f"connector='{src_name}' category_supported=False execution_status=SKIPPED result_count=0"
+        )
+        return
+
     from backend.app.worker_concurrency import _global_limiter
     r = _global_limiter._redis_client
     job_id_str = str(job.id)
@@ -273,8 +314,9 @@ def execute_single_query_plan(db, job, plan) -> None:
                     reqs_executed = int(r.hget(f"job_metrics:{job_id_str}", "requests_executed") or 0)
                 except Exception:
                     pass
-            if reqs_executed >= 100:
-                logger.warning(f"Crawl budget limit of 100 requests reached. Aborting.")
+            crawl_budget = max(100, (job.target_lead_count or 10) * 10)
+            if reqs_executed >= crawl_budget:
+                logger.warning(f"Crawl budget limit of {crawl_budget} requests reached. Aborting.")
                 pagination_state["has_more"] = False
                 break
 
@@ -286,96 +328,108 @@ def execute_single_query_plan(db, job, plan) -> None:
                 pagination_state["seen_cursors"].add(cursor)
 
             records = []
-            retry_count = 0
-            max_retries = 3
-            
-            while retry_count <= max_retries:
-                try:
-                    track_metric(job_id_str, "requests_executed")
-                    track_metric(job_id_str, "crawl_budget_consumed")
-                    start_time = time.time()
+            try:
+                track_metric(job_id_str, "requests_executed")
+                track_metric(job_id_str, "crawl_budget_consumed")
+                start_time = time.time()
 
-                    import inspect
-                    sig = inspect.signature(connector.search_leads)
-                    if "pagination_state" in sig.parameters:
-                        records = connector.search_leads(
-                            query=query_term,
-                            location=loc_param,
-                            limit=50,
-                            page=page_num,
-                            pagination_state=pagination_state
-                        )
-                    else:
-                        records = connector.search_leads(
-                            query=query_term,
-                            location=loc_param,
-                            limit=50,
-                            page=page_num
-                        )
-                        pagination_state["results_returned"] = pagination_state.get("results_returned", 0) + len(records)
-                        if len(records) == 0:
-                            pagination_state["has_more"] = False
-                            
-                    latency_ms = (time.time() - start_time) * 1000
-                    track_metric(job_id_str, "latency_sum", int(latency_ms))
-                    track_metric(job_id_str, "latency_count", 1)
-                    
-                    if hasattr(connector, "record_success"):
-                        connector.record_success()
-                    break
-                except Exception as src_err:
-                    err_str = str(src_err).lower()
-                    classification = "UNAVAILABLE_PROVIDER"
-                    
-                    if "timeout" in err_str:
-                        classification = "TIMEOUT"
-                        track_metric(job_id_str, "timeouts")
-                    elif "429" in err_str or "rate limit" in err_str:
-                        classification = "RATE_LIMITED"
-                        track_metric(job_id_str, "429s")
-                    elif "401" in err_str or "403" in err_str or "auth" in err_str or "key" in err_str:
-                        classification = "AUTH_FAILURE"
-                    elif "500" in err_str or "server error" in err_str:
-                        classification = "SERVER_ERROR"
-                    elif "json" in err_str or "decode" in err_str:
-                        classification = "MALFORMED_RESPONSE"
-                    elif "empty" in err_str:
-                        classification = "EMPTY_RESPONSE"
+                import inspect
+                sig = inspect.signature(connector.search_leads)
+                if "pagination_state" in sig.parameters:
+                    records = connector.search_leads(
+                        query=query_term,
+                        location=loc_param,
+                        limit=50,
+                        page=page_num,
+                        pagination_state=pagination_state
+                    )
+                else:
+                    records = connector.search_leads(
+                        query=query_term,
+                        location=loc_param,
+                        limit=50,
+                        page=page_num
+                    )
+                    pagination_state["results_returned"] = pagination_state.get("results_returned", 0) + len(records)
+                    if len(records) == 0:
+                        pagination_state["has_more"] = False
                         
-                    is_transient = classification in ("TIMEOUT", "SERVER_ERROR", "RATE_LIMITED", "UNAVAILABLE_PROVIDER")
-                    if is_transient and retry_count < max_retries:
-                        retry_count += 1
-                        track_metric(job_id_str, "retries")
-                        time.sleep(2 ** retry_count)
-                        continue
-                    else:
-                        logger.error(f"[Failure] Permanent failure '{classification}' for {src_name}: {src_err}")
-                        track_metric(job_id_str, "source_failures")
-                        if r:
-                            r.sadd(f"job_failed_sources:{job_id_str}", src_name)
-                        if hasattr(connector, "record_failure"):
-                            connector.record_failure()
-                            
-                        exec_log = ScrapeJobExecutionLog(
-                            job_id=job.id,
-                            source=src_name,
-                            query=f"{query_term} ({query_reason})",
-                            page=page_num,
-                            records_received=0,
-                            records_valid=0,
-                            records_rejected=0,
-                            new_count=0,
-                            updated_count=0,
-                            duplicate_count=0,
-                            failed_count=1,
-                            error_reason=f"[{classification}] {src_err}",
-                        )
-                        db.add(exec_log)
-                        db.commit()
-                        return
+                latency_ms = (time.time() - start_time) * 1000
+                track_metric(job_id_str, "latency_sum", int(latency_ms))
+                track_metric(job_id_str, "latency_count", 1)
+                
+                if hasattr(connector, "record_success"):
+                    connector.record_success()
+            except Exception as src_err:
+                err_str = str(src_err).lower()
+                classification = "UNAVAILABLE_PROVIDER"
+                
+                if "timeout" in err_str:
+                    classification = "TIMEOUT"
+                    track_metric(job_id_str, "timeouts")
+                elif "429" in err_str or "rate limit" in err_str:
+                    classification = "RATE_LIMITED"
+                    track_metric(job_id_str, "429s")
+                elif "401" in err_str or "403" in err_str or "auth" in err_str or "key" in err_str:
+                    classification = "AUTH_FAILURE"
+                elif "500" in err_str or "504" in err_str or "server error" in err_str:
+                    classification = "SERVER_ERROR"
+                elif "json" in err_str or "decode" in err_str:
+                    classification = "MALFORMED_RESPONSE"
+                elif "empty" in err_str:
+                    classification = "EMPTY_RESPONSE"
+                    
+                logger.error(f"[Failure] Provider failure '{classification}' for {src_name}: {src_err}")
+                track_metric(job_id_str, "source_failures")
+                if r:
+                    r.sadd(f"job_failed_sources:{job_id_str}", src_name)
+                if hasattr(connector, "record_failure"):
+                    connector.record_failure()
+                    
+                exec_log = ScrapeJobExecutionLog(
+                    job_id=job.id,
+                    source=src_name,
+                    query=f"{query_term} ({query_reason})",
+                    page=page_num,
+                    records_received=0,
+                    records_valid=0,
+                    records_rejected=0,
+                    new_count=0,
+                    updated_count=0,
+                    duplicate_count=0,
+                    failed_count=1,
+                    error_reason=f"[{classification}] {src_err}",
+                )
+                db.add(exec_log)
+                db.commit()
+
+                # Automated Resilient Cascade: If primary provider failed, try osm_overpass fallback
+                if src_name != "osm_overpass":
+                    try:
+                        logger.info(f"[Fallback] Source '{src_name}' failed ({classification}). Automatically cascading to 'osm_overpass' for query '{query_term}' in '{loc_param}'")
+                        osm_conn = connectors.get("osm_overpass")
+                        if osm_conn:
+                            records = osm_conn.search_leads(
+                                query=query_term,
+                                location=loc_param,
+                                limit=job.target_lead_count or 50,
+                                page=page_num,
+                                pagination_state=pagination_state,
+                            )
+                            if records:
+                                logger.info(f"[Fallback] 'osm_overpass' successfully recovered {len(records)} candidate leads!")
+                                if r:
+                                    r.sadd(f"job_success_sources:{job_id_str}", "osm_overpass")
+                    except Exception as fb_err:
+                        logger.warning(f"[Fallback] Fallback discovery via 'osm_overpass' failed: {fb_err}")
+                        records = []
+
+                if not records:
+                    return
 
             records_received = len(records)
             track_metric(job_id_str, "results_received", records_received)
+            job.fetched_count = getattr(job, 'fetched_count', 0) + records_received
             
             records_valid = 0
             records_rejected = 0
@@ -389,7 +443,23 @@ def execute_single_query_plan(db, job, plan) -> None:
             else:
                 empty_pages_count = 0
 
-            for rec in records:
+            # Candidate signal scoring for intelligent prioritization
+            def _candidate_signal_score(r_cand) -> int:
+                s = 0
+                if r_cand.website and str(r_cand.website).strip():
+                    s += 40
+                if r_cand.phone and str(r_cand.phone).strip():
+                    s += 35
+                if r_cand.email and str(r_cand.email).strip():
+                    s += 30
+                if r_cand.address and str(r_cand.address).strip():
+                    s += 15
+                return s
+
+            # Sort records so strongest candidate signals are evaluated and enriched first
+            prioritized_records = sorted(records, key=_candidate_signal_score, reverse=True)
+
+            for rec in prioritized_records:
                 if job.leads_scraped >= job.target_lead_count:
                     break
 
@@ -408,18 +478,13 @@ def execute_single_query_plan(db, job, plan) -> None:
                     continue
                 seen_ids.add(rec_key)
 
-                if (
-                    not rec.business_name
-                    or not str(rec.business_name).strip()
-                    or rec.business_name.lower() == "unknown business"
-                ):
+                from backend.app.orchestration.discovery_orchestrator import is_viable_candidate
+
+                if not is_viable_candidate(rec):
                     records_rejected += 1
                     job.failed_count += 1
                     page_failed += 1
                     continue
-
-                records_valid += 1
-                job.valid_count += 1
 
                 raw_lead = RawLead(
                     source_name=rec.source,
@@ -459,24 +524,158 @@ def execute_single_query_plan(db, job, plan) -> None:
                     track_metric(job_id_str, "cross_source_matches")
                     pagination_state["unique_results"] = pagination_state.get("unique_results", 0) + 1
 
+                # ── Candidate Discovery & Targeted Enrichment ──
+                effective_website = rec.website
+                effective_phone = rec.phone
+                effective_email = rec.email
+                discovered_socials = {}
+                discovered_whatsapp = []
+                enr_res = None
+
+                job_enrichments = getattr(job, "enrichments", None)
+                is_enrichment_enabled = (
+                    bool(job_enrichments)
+                    if job_enrichments is not None
+                    else bool(job.service)
+                )
+
+                if is_enrichment_enabled:
+                    website_evidence_source = "PROVIDER_GROUND_TRUTH" if effective_website else None
+                    # 0. Zero-Budget Official Website Discovery & Verification (if candidate lacks website)
+                    if not effective_website:
+                        try:
+                            from backend.app.enrichment.website_discovery import (
+                                ZeroBudgetDiscoveryEngine,
+                                VerificationDecision,
+                            )
+
+                            disc_engine = ZeroBudgetDiscoveryEngine()
+                            raw_tags = rec.raw_data.get("tags") if isinstance(rec.raw_data, dict) else {}
+                            verif_res = disc_engine.discover_and_verify_official_website(
+                                business_name=rec.business_name,
+                                phone=rec.phone,
+                                email=rec.email,
+                                address=rec.address,
+                                city=rec.city,
+                                raw_data_tags=raw_tags,
+                            )
+
+                            if verif_res.decision == VerificationDecision.ACCEPT and verif_res.verified_url:
+                                effective_website = verif_res.verified_url
+                                website_evidence_source = verif_res.provenance.value
+                                if canonical_lead:
+                                    canonical_lead.canonical_domain = verif_res.verified_url
+                                    canonical_lead.website_state = "VERIFIED"
+                                logger.info(
+                                    f"[Website Discovery] Successfully verified official website for '{rec.business_name}': {verif_res.verified_url}"
+                                )
+                        except Exception as disc_err:
+                            logger.warning(
+                                f"[Website Discovery] Zero-budget discovery warning for candidate '{rec.business_name}': {disc_err}"
+                            )
+
+                    # 1. Production Website Intelligence & Deep Contact Enrichment
+                    if effective_website:
+                        try:
+                            from backend.app.enrichment.website_enricher import ProductionWebsiteEnricher
+
+                            enricher = ProductionWebsiteEnricher()
+                            enr_res = enricher.enrich_website(
+                                target_url=effective_website,
+                                provider_phone=rec.phone,
+                                provider_email=rec.email,
+                                provider_address=rec.address,
+                            )
+
+                            if enr_res and enr_res.contacts:
+                                if enr_res.contacts.phones and not effective_phone:
+                                    effective_phone = enr_res.contacts.phones[0].get("phone")
+                                if enr_res.contacts.emails and not effective_email:
+                                    effective_email = enr_res.contacts.emails[0].get("email")
+                                discovered_whatsapp = enr_res.contacts.whatsapp_links or []
+                            if enr_res and enr_res.social_profiles:
+                                discovered_socials = enr_res.social_profiles
+                        except Exception as enrich_err:
+                            logger.warning(
+                                f"[Enrichment] Website enrichment warning for '{rec.business_name}': {enrich_err}"
+                            )
+
+                # ── Deterministic Production Quality Gate ──
+                from backend.app.intelligence.quality_gate import (
+                    QualityGateEngine,
+                    QualityGateDecision,
+                )
+
+                extra_ph = [p.get("phone") for p in (enr_res.contacts.phones if enr_res and enr_res.contacts else []) if p.get("phone")]
+                extra_em = [e.get("email") for e in (enr_res.contacts.emails if enr_res and enr_res.contacts else []) if e.get("email")]
+                extra_wa = discovered_whatsapp
+
+                gate_res = QualityGateEngine.evaluate_candidate(
+                    business_name=rec.business_name,
+                    phone=effective_phone,
+                    email=effective_email,
+                    website=effective_website,
+                    whatsapp=None,
+                    social_profiles=discovered_socials,
+                    website_verification_status="ACCEPT" if effective_website else None,
+                    category=rec.category or job.niche,
+                    target_niche=job.niche,
+                    address=rec.address,
+                    city=job.state or job.region,
+                    target_location=location,
+                    extra_phones=extra_ph,
+                    extra_emails=extra_em,
+                    extra_whatsapp_links=extra_wa,
+                )
+
+                if gate_res.decision == QualityGateDecision.REJECT:
+                    records_rejected += 1
+                    job.failed_count += 1
+                    page_failed += 1
+                    rej_reason_str = gate_res.rejection_reason.value if gate_res.rejection_reason else "UNQUALIFIED_CANDIDATE"
+                    logger.info(
+                        f"[QualityGate] Candidate '{rec.business_name}' REJECTED: {rej_reason_str} "
+                        f"({'; '.join(gate_res.rejection_details)})"
+                    )
+                    track_metric(job_id_str, f"rejected_{rej_reason_str}")
+                    continue  # DO NOT PERSIST AS PRODUCTION LEAD; CONTINUE DISCOVERY
+
+                # ── Candidate Passed Quality Gate -> Promote to Production Lead ──
+                records_valid += 1
+                job.valid_count += 1
+
+                final_phone = gate_res.verified_contacts.get("phone") or effective_phone
+                final_email = gate_res.verified_contacts.get("email") or effective_email
+                final_website = gate_res.verified_contacts.get("website") or effective_website
+
                 existing_src = db.scalar(
                     select(SourceRecord).where(
                         SourceRecord.source == rec.source,
                         SourceRecord.source_id == rec.source_id,
                     )
                 )
-                if not existing_src:
+                if existing_src:
+                    lead = db.get(Lead, existing_src.lead_id)
+                    if lead:
+                        if final_phone and not lead.phone:
+                            lead.phone = final_phone
+                        if final_email and not lead.email:
+                            lead.email = final_email
+                        if final_website and not lead.website:
+                            lead.website = final_website
+                else:
                     lead = Lead(
                         workspace_id=job.workspace_id,
                         job_id=job.id,
                         business_name=rec.business_name,
-                        website=rec.website,
-                        phone=rec.phone,
-                        notes=f"Source: {rec.source}",
+                        website=final_website,
+                        phone=final_phone,
+                        email=final_email,
+                        notes=f"Source: {rec.source} | Accepted: {', '.join(gate_res.acceptance_reasons)}",
                         raw_status="PERSISTED",
-                        verification_status="VERIFIED"
-                        if (rec.website or rec.phone)
-                        else "UNVERIFIED",
+                        verification_status="VERIFIED",
+                        genuineness_status="VERIFIED",
+                        genuineness_score=gate_res.identity_confidence,
                     )
                     db.add(lead)
                     db.flush()
@@ -489,97 +688,229 @@ def execute_single_query_plan(db, job, plan) -> None:
                         raw_data=rec.raw_data,
                     )
                     db.add(src_rec)
+                    db.flush()
 
-                    from backend.app.intelligence import GenuinenessAgent, LearningAgent
-
-                    decision = GenuinenessAgent().evaluate_lead_genuineness(db, lead)
-                    learning_agent = LearningAgent()
-                    learning_agent.record_feature_snapshot(
-                        db,
-                        job.workspace_id,
-                        lead.id,
-                        {
-                            "source": rec.source,
-                            "niche": job.niche,
-                            "location": location,
-                            "website_exists": bool(rec.website),
-                            "phone_exists": bool(rec.phone),
-                        },
-                    )
-                    learning_agent.record_prediction(
-                        db,
-                        job.workspace_id,
-                        lead.id,
-                        model_name="CatBoostLightGBMEnsemble",
-                        model_version="v2.0_phase3_ensemble",
-                        prediction=decision.overall_score,
-                        confidence=decision.business_confidence,
-                        decision=decision.decision,
-                    )
-
-                try:
-                    track_metric(job_id_str, "enrichment_requests")
-                    enrichment_engine.enrich_lead(canonical_lead.id, raw_lead)
-                except Exception as enrich_err:
-                    logger.warning(
-                        f"Auto enrichment warning on canonical lead {canonical_lead.id}: {enrich_err}"
-                    )
-
-                try:
-                    lead_payload = {
-                        "canonical_lead_id": canonical_lead.id,
-                        "business_name": canonical_lead.business_name,
-                        "website": canonical_lead.canonical_domain,
-                        "phone": canonical_lead.canonical_phone,
-                        "email": canonical_lead.canonical_email,
-                        "country": canonical_lead.country or job.country or "United States",
-                        "region_state": canonical_lead.state or job.state or job.region,
-                        "city": canonical_lead.city,
-                        "niche": job.niche or canonical_lead.industry or "General",
-                        "business_type": canonical_lead.business_maturity or "SMALL_BUSINESS",
-                        "website_state": "active"
-                        if canonical_lead.canonical_domain
-                        else "no_website",
-                        "ssl_valid": "Y" if canonical_lead.canonical_domain else "N",
-                        "facebook_ads_detected": "N",
-                    }
-
-                    classified_lead = MultiLabelClassificationAgent.classify_lead(
-                        lead_payload
-                    )
-                    s_map = classified_lead.get("service_classifications", {})
-
-                    for s_name, s_info in s_map.items():
-                        stype_upper = s_name.upper()
-                        eligible_str = "Y" if s_info.get("eligible") else "N"
-                        score_val = float(s_info.get("score", 0.0))
-                        reasons_json = json.dumps(s_info.get("reasons", []))
-
-                        existing_so = db.scalar(
-                            select(ServiceOpportunity).where(
-                                ServiceOpportunity.canonical_lead_id == canonical_lead.id,
-                                ServiceOpportunity.service_type == stype_upper,
+                # Record Evidence and Intelligence
+                if lead and is_enrichment_enabled:
+                    try:
+                        # Record Website Evidence
+                        if final_website:
+                            _upsert_evidence_record(
+                                db=db,
+                                workspace_id=job.workspace_id,
+                                lead_id=lead.id,
+                                canonical_lead_id=str(canonical_lead.id) if canonical_lead else None,
+                                field_name="website",
+                                status="VERIFIED",
+                                confidence_score=int(gate_res.identity_confidence * 100),
+                                source=website_evidence_source or "QUALITY_GATE_VERIFIED",
+                                details={"verified_url": final_website, "reasons": gate_res.acceptance_reasons},
                             )
+
+                        # Record Contacts Evidence
+                        if enr_res and enr_res.contacts:
+                            _upsert_evidence_record(
+                                db=db,
+                                workspace_id=job.workspace_id,
+                                lead_id=lead.id,
+                                canonical_lead_id=str(canonical_lead.id) if canonical_lead else None,
+                                field_name="contacts",
+                                status="VERIFIED",
+                                confidence_score=gate_res.contactability_score,
+                                source="WEBSITE_ENRICHMENT",
+                                details={
+                                    "emails": enr_res.contacts.emails,
+                                    "phones": enr_res.contacts.phones,
+                                    "whatsapp_links": enr_res.contacts.whatsapp_links,
+                                    "addresses": enr_res.contacts.addresses,
+                                },
+                            )
+
+                        # Record SEO Evidence
+                        if enr_res and enr_res.seo:
+                            _upsert_evidence_record(
+                                db=db,
+                                workspace_id=job.workspace_id,
+                                lead_id=lead.id,
+                                canonical_lead_id=str(canonical_lead.id) if canonical_lead else None,
+                                field_name="seo",
+                                status="VERIFIED",
+                                confidence_score=enr_res.seo.seo_score,
+                                source="WEBSITE_ENRICHMENT",
+                                details={
+                                    "title": enr_res.seo.title,
+                                    "meta_description": enr_res.seo.meta_description,
+                                    "canonical_url": enr_res.seo.canonical_url,
+                                    "h1_tags": enr_res.seo.h1_tags,
+                                    "h2_tags": enr_res.seo.h2_tags,
+                                    "seo_issues": enr_res.seo.seo_issues,
+                                },
+                            )
+
+                        # Record Technologies
+                        if enr_res and enr_res.technologies:
+                            _upsert_evidence_record(
+                                db=db,
+                                workspace_id=job.workspace_id,
+                                lead_id=lead.id,
+                                canonical_lead_id=str(canonical_lead.id) if canonical_lead else None,
+                                field_name="technologies",
+                                status="VERIFIED",
+                                confidence_score=90,
+                                source="WEBSITE_ENRICHMENT",
+                                details={"detected_technologies": enr_res.technologies},
+                            )
+
+                        # Record Social Profiles
+                        if discovered_socials:
+                            _upsert_evidence_record(
+                                db=db,
+                                workspace_id=job.workspace_id,
+                                lead_id=lead.id,
+                                canonical_lead_id=str(canonical_lead.id) if canonical_lead else None,
+                                field_name="social_profiles",
+                                status="VERIFIED",
+                                confidence_score=90,
+                                source="WEBSITE_ENRICHMENT",
+                                details={"profiles": discovered_socials},
+                            )
+
+                        # Optional Service Classification
+                        if canonical_lead:
+                            try:
+                                import json
+                                from backend.app.services.classification_agent import MultiLabelClassificationAgent
+                                from backend.app.models_services import ServiceOpportunity
+
+                                lead_payload = {
+                                    "canonical_lead_id": canonical_lead.id,
+                                    "business_name": canonical_lead.business_name,
+                                    "website": canonical_lead.canonical_domain,
+                                    "phone": canonical_lead.canonical_phone,
+                                    "email": canonical_lead.canonical_email,
+                                    "country": canonical_lead.country or job.country or "United States",
+                                    "region_state": canonical_lead.state or job.state or job.region,
+                                    "city": canonical_lead.city,
+                                    "niche": job.niche or canonical_lead.industry or "General",
+                                    "business_type": canonical_lead.business_maturity or "SMALL_BUSINESS",
+                                    "website_state": "active" if canonical_lead.canonical_domain else "no_website",
+                                    "ssl_valid": "Y" if canonical_lead.canonical_domain else "N",
+                                    "facebook_ads_detected": "N",
+                                }
+
+                                classified_lead = MultiLabelClassificationAgent.classify_lead(lead_payload)
+                                s_map = classified_lead.get("service_classifications", {})
+
+                                for s_name, s_info in s_map.items():
+                                    stype_upper = s_name.upper()
+                                    eligible_str = "Y" if s_info.get("eligible") else "N"
+                                    score_val = float(s_info.get("score", 0.0))
+                                    reasons_json = json.dumps(s_info.get("reasons", []))
+
+                                    existing_so = db.scalar(
+                                        select(ServiceOpportunity).where(
+                                            ServiceOpportunity.canonical_lead_id == canonical_lead.id,
+                                            ServiceOpportunity.service_type == stype_upper,
+                                        )
+                                    )
+                                    if existing_so:
+                                        existing_so.eligible = eligible_str
+                                        existing_so.score = score_val
+                                        existing_so.reasons = reasons_json
+                                    else:
+                                        new_so = ServiceOpportunity(
+                                            canonical_lead_id=canonical_lead.id,
+                                            service_type=stype_upper,
+                                            eligible=eligible_str,
+                                            score=score_val,
+                                            confidence=s_info.get("confidence", 0.85),
+                                            reasons=reasons_json,
+                                        )
+                                        db.add(new_so)
+                            except Exception as class_err:
+                                logger.warning(f"[Classification] Service classification warning: {class_err}")
+
+                        # Optional Genuineness and Learning Agent
+                        try:
+                            from backend.app.intelligence import GenuinenessAgent, LearningAgent
+
+                            decision = GenuinenessAgent().evaluate_lead_genuineness(db, lead)
+                            learning_agent = LearningAgent()
+                            learning_agent.record_feature_snapshot(
+                                db,
+                                job.workspace_id,
+                                lead.id,
+                                {
+                                    "source": rec.source,
+                                    "niche": job.niche,
+                                    "location": location,
+                                    "website_exists": bool(final_website),
+                                    "phone_exists": bool(final_phone),
+                                },
+                            )
+                            learning_agent.record_prediction(
+                                db,
+                                job.workspace_id,
+                                lead.id,
+                                model_name="CatBoostLightGBMEnsemble",
+                                model_version="v2.0_phase3_ensemble",
+                                prediction=decision.overall_score,
+                                confidence=decision.business_confidence,
+                                decision=decision.decision,
+                            )
+                        except Exception as ml_err:
+                            logger.warning(f"[Enrichment] Genuineness / Learning agent warning on {lead.id}: {ml_err}")
+
+                        # Evaluate Lead Intelligence
+                        from backend.app.intelligence.lead_intelligence import LeadIntelligenceEngine
+
+                        contacts_ev = enr_res.contacts.__dict__ if enr_res and enr_res.contacts else {}
+                        seo_ev = enr_res.seo.__dict__ if enr_res and enr_res.seo else {}
+                        soc_ev = {"profiles": discovered_socials}
+                        tech_ev = enr_res.technologies if enr_res else []
+                        conf_ev = enr_res.conflicts if enr_res else {}
+                        health_ev = enr_res.health.__dict__ if enr_res and enr_res.health else {}
+
+                        intel_report = LeadIntelligenceEngine.evaluate_lead(
+                            business_name=rec.business_name,
+                            website=final_website,
+                            phone=final_phone,
+                            email=final_email,
+                            category=rec.category or job.niche,
+                            genuineness_score=gate_res.identity_confidence,
+                            website_health=health_ev,
+                            contacts_evidence=contacts_ev,
+                            seo_evidence=seo_ev,
+                            social_evidence=soc_ev,
+                            technologies_evidence=tech_ev,
+                            conflicts_evidence=conf_ev,
                         )
-                        if existing_so:
-                            existing_so.eligible = eligible_str
-                            existing_so.score = score_val
-                            existing_so.reasons = reasons_json
-                        else:
-                            new_so = ServiceOpportunity(
-                                canonical_lead_id=canonical_lead.id,
-                                service_type=stype_upper,
-                                eligible=eligible_str,
-                                score=score_val,
-                                confidence=s_info.get("confidence", 0.85),
-                                reasons=reasons_json,
-                            )
-                            db.add(new_so)
 
-                except Exception as class_err:
-                    logger.error(
-                        f"Service classification error on {canonical_lead.id}: {class_err}"
-                    )
+                        _upsert_evidence_record(
+                            db=db,
+                            workspace_id=job.workspace_id,
+                            lead_id=lead.id,
+                            canonical_lead_id=str(canonical_lead.id) if canonical_lead else None,
+                            field_name="lead_intelligence",
+                            status=intel_report.opportunity_category.value,
+                            confidence_score=intel_report.overall_opportunity_score,
+                            source="LEAD_INTELLIGENCE_ENGINE",
+                            details={
+                                "overall_opportunity_score": intel_report.overall_opportunity_score,
+                                "opportunity_category": intel_report.opportunity_category.value,
+                                "confidence_score": intel_report.confidence_score,
+                                "contactability_score": intel_report.contactability_score,
+                                "website_opportunity_score": intel_report.website_opportunity_score,
+                                "seo_opportunity_score": intel_report.seo_opportunity_score,
+                                "digital_presence_gap_score": intel_report.digital_presence_gap_score,
+                                "top_reasons": intel_report.top_reasons,
+                                "has_conflict": intel_report.has_conflict,
+                            },
+                        )
+                    except Exception as intel_err:
+                        logger.warning(
+                            f"[Intelligence] Scoring warning for lead {lead.id}: {intel_err}"
+                        )
 
                 job.leads_scraped += 1
                 job.progress_percent = min(
@@ -605,7 +936,6 @@ def execute_single_query_plan(db, job, plan) -> None:
                 }
                 prog_data.update(get_job_metrics(job_id_str))
                 publish_job_progress(str(job.id), prog_data)
-
             if r:
                 r.sadd(f"job_success_sources:{job_id_str}", src_name)
 
@@ -632,39 +962,100 @@ def finalize_job_status(db, job, job_id_str: str) -> None:
     from backend.app.websockets import publish_job_progress
     from backend.app.worker_concurrency import _global_limiter
     r = _global_limiter._redis_client
-    
+
     failed_sources = []
     successful_sources = []
     if r:
         try:
-            failed_sources = list(r.smembers(f"job_failed_sources:{job_id_str}") or [])
-            successful_sources = list(r.smembers(f"job_success_sources:{job_id_str}") or [])
+            raw_failed = r.smembers(f"job_failed_sources:{job_id_str}") or set()
+            raw_success = r.smembers(f"job_success_sources:{job_id_str}") or set()
+            failed_sources = [s.decode() if isinstance(s, bytes) else s for s in raw_failed]
+            successful_sources = [s.decode() if isinstance(s, bytes) else s for s in raw_success]
         except Exception:
             pass
 
-    db.refresh(job)
-    if job.status not in ("STOPPED_SAVED", "CANCELLED"):
-        if len(failed_sources) > 0 and len(successful_sources) > 0:
-            job.status = "PARTIAL_SUCCESS"
-        elif len(failed_sources) > 0 and len(successful_sources) == 0:
-            job.status = "FAILED"
-        else:
-            if job.leads_scraped >= job.target_lead_count:
-                job.status = "COMPLETED"
-            else:
-                job.status = "PARTIAL"
+    # Redis-absent / Execution log fallback
+    if not failed_sources and not successful_sources:
+        if job.failed_count > 0:
+            failed_sources = ["inferred"]
+        if (job.new_count + job.updated_count) > 0:
+            successful_sources = ["inferred"]
 
-        job.progress_percent = min(
-            100.0, round((job.leads_scraped / job.target_lead_count) * 100, 1)
+        try:
+            from backend.app.models import ScrapeJobExecutionLog
+            exec_failures = db.query(ScrapeJobExecutionLog).filter(
+                ScrapeJobExecutionLog.job_id == job.id,
+                ScrapeJobExecutionLog.failed_count > 0,
+            ).all()
+            if exec_failures:
+                failed_sources = [ef.source for ef in exec_failures]
+        except Exception:
+            pass
+
+    provider_unavailable = False
+    try:
+        provider_unavailable = any(
+            any(marker in (failure.error_reason or "").upper() for marker in (
+                "PROVIDER_UNAVAILABLE",
+                "TIMEOUT",
+                "504",
+                "503",
+                "REQUEST_DENIED",
+                "CREDENTIAL_MISSING",
+            ))
+            for failure in exec_failures
         )
+    except (NameError, TypeError):
+        pass
+
+    # Database invariant check: verify and sync leads_scraped against actual persisted records
+    db.refresh(job)
+    try:
+        from backend.app.models import Lead
+        persisted_count = db.query(Lead).filter(Lead.job_id == job.id).count()
+        job.leads_scraped = max(job.leads_scraped, persisted_count)
+    except Exception as e:
+        logger.warning(f"Failed to check persisted leads count for job {job.id}: {e}")
+
+    target = job.target_lead_count or 1
+    scraped = job.leads_scraped
+    has_provider_failures = len(failed_sources) > 0
+
+    if job.status in ("STOPPED_SAVED", "CANCELLED"):
+        completion_reason = "CANCELLED" if job.status == "CANCELLED" else "STOPPED_SAVED"
+    elif scraped >= target:
+        job.status = "COMPLETED"
+        completion_reason = "TARGET_REACHED"
+    elif scraped == 0 and target > 0:
+        job.status = "FAILED"
+        if has_provider_failures and not successful_sources:
+            completion_reason = "PROVIDER_UNAVAILABLE" if provider_unavailable else "ALL_SOURCES_FAILED"
+            job.error_message = "All provider sources failed."
+        else:
+            completion_reason = "DISCOVERY_EXHAUSTED"
+            job.error_message = "Discovery exhausted. No valid leads found."
+    else:  # 0 < scraped < target
+        job.status = "PARTIAL"
+        if has_provider_failures:
+            completion_reason = "PARTIAL_SOURCE_FAILURE"
+        else:
+            completion_reason = "DISCOVERY_EXHAUSTED"
+
+    job.completion_reason = completion_reason
+    job.progress_percent = min(
+        100.0, round((scraped / target) * 100, 1) if target > 0 else 0.0
+    )
+    if job.status not in ("STOPPED_SAVED", "CANCELLED"):
         db.commit()
 
     prog_data = {
         "event_type": f"JOB_{job.status}",
         "job_id": str(job.id),
         "status": job.status,
-        "leads_scraped": job.leads_scraped,
-        "target_lead_count": job.target_lead_count,
+        "completion_reason": completion_reason,
+        "error_message": job.error_message,
+        "leads_scraped": scraped,
+        "target_lead_count": target,
         "progress_percent": job.progress_percent,
         "discovered": job.discovered_count,
         "valid": job.valid_count,
@@ -672,9 +1063,11 @@ def finalize_job_status(db, job, job_id_str: str) -> None:
         "updated": job.updated_count,
         "duplicates": job.duplicate_count,
         "failed": job.failed_count,
+        "fetched_count": getattr(job, 'fetched_count', 0),
     }
     prog_data.update(get_job_metrics(job_id_str))
     publish_job_progress(str(job.id), prog_data)
+
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=10)
@@ -736,103 +1129,49 @@ def execute_scrape_job(self, job_id_str: str) -> None:
     )
 
     job_id = uuid.UUID(job_id_str)
+    
     with SessionLocal() as db:
         job = db.scalar(select(ScrapeJob).where(ScrapeJob.id == job_id))
         if not job or job.status in ("COMPLETED", "PARTIAL", "CANCELLED", "STOPPED_SAVED"):
             return
+        workspace_id = str(job.workspace_id)
 
-        try:
-            with workspace_concurrency_guard(str(job.workspace_id)):
+    try:
+        with workspace_concurrency_guard(workspace_id):
+            with SessionLocal() as db:
+                job = db.scalar(select(ScrapeJob).where(ScrapeJob.id == job_id))
+                if not job or job.status in ("COMPLETED", "PARTIAL", "CANCELLED", "STOPPED_SAVED"):
+                    return
                 job.status = "RUNNING"
                 db.commit()
-                publish_job_progress(
-                    str(job.id),
-                    {
-                        "event_type": "JOB_STARTED",
-                        "job_id": str(job.id),
-                        "status": job.status,
-                        "leads_scraped": job.leads_scraped,
-                        "target_lead_count": job.target_lead_count,
-                        "progress_percent": job.progress_percent,
-                    },
-                )
+                
+                pub_data = {
+                    "event_type": "JOB_STARTED",
+                    "job_id": str(job.id),
+                    "status": job.status,
+                    "leads_scraped": job.leads_scraped,
+                    "target_lead_count": job.target_lead_count,
+                    "progress_percent": job.progress_percent,
+                }
+            publish_job_progress(str(job_id), pub_data)
 
-                target_sources = job.sources or ["google_maps"]
-                location = job.state or job.region or job.country
+            from backend.app.orchestration.discovery_orchestrator import DiscoveryOrchestrator
+            connectors = get_connectors()
+            orchestrator = DiscoveryOrchestrator(
+                job_id=job_id,
+                connectors=connectors,
+                max_request_budget=60,
+            )
+            orchestrator.run_discovery()
 
-                from backend.app.intelligence.query_expansion import QueryExpansionEngine
-                from backend.app.intelligence.adaptive_discovery import AdaptiveDiscoveryEngine
-
-                search_plan_base = QueryExpansionEngine().expand_query(job.niche, location)
-
-                # Build Cartesian query plans
-                query_plans = []
-                for src in target_sources:
-                    for item in search_plan_base:
-                        q_term = item["query"]
-                        q_reason = item.get("reason", "unknown")
-                        
-                        reason_lower = q_reason.lower()
-                        if "exact" in reason_lower:
-                            priority = 1
-                        elif "plural" in reason_lower or "singular" in reason_lower:
-                            priority = 2
-                        elif "synonym" in reason_lower or "service" in reason_lower or "subcategory" in reason_lower:
-                            priority = 3
-                        else:
-                            priority = 4
-                            
-                        hist_score = AdaptiveDiscoveryEngine.get_query_score(db, q_term)
-                        query_plans.append({
-                            "query": q_term,
-                            "reason": q_reason,
-                            "source": src,
-                            "niche": job.niche,
-                            "location": location,
-                            "priority": priority,
-                            "historical_score": hist_score
-                        })
-                        
-                # Prioritize plans
-                sorted_plans = sorted(
-                    query_plans,
-                    key=lambda x: (x["historical_score"], -x["priority"]),
-                    reverse=True
-                )
-
-                from backend.app.worker_concurrency import _global_limiter
-                r = _global_limiter._redis_client
-                import os
-                is_test = os.getenv("APP_ENV") == "test"
-
-                if r and not is_test:
-                    try:
-                        # Clear old metrics
-                        r.delete(f"job_metrics:{job_id_str}")
-                        r.delete(f"job_failed_sources:{job_id_str}")
-                        r.delete(f"job_success_sources:{job_id_str}")
-                        
-                        r.set(f"job_active_tasks:{job_id_str}", len(sorted_plans))
-                        for plan in sorted_plans:
-                            scrape_source_query_task.delay(job_id_str, plan)
-                    except Exception as e:
-                        logger.warning(f"Failed to queue Celery tasks: {e}. Executing inline.")
-                        r = None
-
-                if not r:
-                    logger.info("Executing plans sequentially inline.")
-                    for plan in sorted_plans:
-                        execute_single_query_plan(db, job, plan)
-                    finalize_job_status(db, job, job_id_str)
-
-        except ConcurrencyCapExceededError as cap_err:
-            db.rollback()
-            job.status = "FAILED"
-            job.error_message = str(cap_err)
-            db.commit()
-            publish_job_progress(
-                str(job.id),
-                {
+    except ConcurrencyCapExceededError as cap_err:
+        with SessionLocal() as db:
+            job = db.scalar(select(ScrapeJob).where(ScrapeJob.id == job_id))
+            if job:
+                job.status = "FAILED"
+                job.error_message = str(cap_err)
+                db.commit()
+                pub_data = {
                     "event_type": "JOB_FAILED",
                     "job_id": str(job.id),
                     "status": job.status,
@@ -846,18 +1185,20 @@ def execute_scrape_job(self, job_id_str: str) -> None:
                     "duplicates": job.duplicate_count,
                     "failed": job.failed_count,
                     "error_message": job.error_message,
-                },
-            )
-            if self and hasattr(self, "request") and self.request and self.request.retries < self.max_retries:
-                raise self.retry(exc=cap_err, countdown=10) from cap_err
-        except Exception as error:
-            db.rollback()
-            job.status = "FAILED"
-            job.error_message = str(error)
-            db.commit()
-            publish_job_progress(
-                str(job.id),
-                {
+                }
+            publish_job_progress(str(job_id), pub_data)
+        if self and hasattr(self, "request") and self.request and self.request.retries < self.max_retries:
+            raise self.retry(exc=cap_err, countdown=10) from cap_err
+    except Exception as error:
+        import logging
+        logging.error(f"Unhandled exception in execute_scrape_job: {error}", exc_info=True)
+        with SessionLocal() as db:
+            job = db.scalar(select(ScrapeJob).where(ScrapeJob.id == job_id))
+            if job:
+                job.status = "FAILED"
+                job.error_message = f"Internal orchestrator error: {str(error)}"
+                db.commit()
+                pub_data = {
                     "event_type": "JOB_FAILED",
                     "job_id": str(job.id),
                     "status": job.status,
@@ -871,10 +1212,11 @@ def execute_scrape_job(self, job_id_str: str) -> None:
                     "duplicates": job.duplicate_count,
                     "failed": job.failed_count,
                     "error_message": job.error_message,
-                },
-            )
-            if self and hasattr(self, "request") and self.request and self.request.retries < self.max_retries:
-                raise self.retry(exc=error, countdown=5 * (2**self.request.retries)) from error
+                }
+            publish_job_progress(str(job_id), pub_data)
+        if self and hasattr(self, "request") and self.request and self.request.retries < self.max_retries:
+            raise self.retry(exc=error, countdown=5 * (2**self.request.retries)) from error
+    return
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=5)
@@ -1084,3 +1426,15 @@ def dispatch_campaign_task(self, campaign_id_str: str) -> None:
 
         campaign.status = "COMPLETED"
         db.commit()
+
+@celery_app.task(name="backend.app.worker.enrich_raw_lead_task")
+def enrich_raw_lead_task(raw_lead_id_str: str, service: str) -> None:
+    """Asynchronous background task for executing Phase 2 enrichment on a RawLead."""
+    import uuid
+    from backend.app.database import SessionLocal
+    from backend.app.enrichment.raw_lead_enricher import RawLeadEnricher
+
+    raw_lead_id = uuid.UUID(raw_lead_id_str)
+    with SessionLocal() as db:
+        enricher = RawLeadEnricher(db)
+        enricher.enrich_raw_lead(raw_lead_id, service)

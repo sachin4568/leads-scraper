@@ -4,7 +4,10 @@ import json
 import logging
 from typing import Any
 
-import redis
+try:
+    import redis
+except ImportError:
+    redis = None
 from fastapi import WebSocket
 
 from backend.app.config import get_settings
@@ -40,14 +43,32 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
+_redis_pub_client: redis.Redis | None = None
+_redis_checked = False
+
+
+def _get_pub_client() -> redis.Redis | None:
+    global _redis_pub_client, _redis_checked
+    if not _redis_checked:
+        _redis_checked = True
+        try:
+            settings = get_settings()
+            if settings.redis_url:
+                client = redis.Redis.from_url(
+                    settings.redis_url.get_secret_value(), socket_timeout=0.2, decode_responses=True
+                )
+                client.ping()
+                _redis_pub_client = client
+        except Exception as err:
+            logger.debug(f"Redis not available for websockets: {err}")
+            _redis_pub_client = None
+    return _redis_pub_client
+
+
 def publish_job_progress(job_id: str, payload: dict[str, Any]) -> None:
-    try:
-        settings = get_settings()
-        if settings.redis_url:
-            r = redis.Redis.from_url(
-                settings.redis_url.get_secret_value(), socket_timeout=1.0, decode_responses=True
-            )
+    r = _get_pub_client()
+    if r:
+        try:
             r.publish(f"job_progress:{job_id}", json.dumps(payload))
-            return
-    except Exception as err:
-        logger.debug(f"Redis publish fallback: {err}")
+        except Exception as err:
+            logger.debug(f"Redis publish fallback: {err}")

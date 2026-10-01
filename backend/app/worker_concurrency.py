@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import logging
 from contextlib import contextmanager
-from typing import Generator
+from typing import Generator, Any
 
-import redis
+try:
+    import redis
+except ImportError:
+    redis = None
 
 from backend.app.config import get_settings
 
@@ -18,13 +21,13 @@ class ConcurrencyCapExceededError(Exception):
 class WorkspaceConcurrencyLimiter:
     def __init__(self) -> None:
         self._memory_counters: dict[str, int] = {}
-        self._redis_client: redis.Redis | None = None
+        self._redis_client: Any = None
         self._init_redis()
 
     def _init_redis(self) -> None:
         try:
             settings = get_settings()
-            if settings.redis_url:
+            if redis and settings.redis_url:
                 client = redis.Redis.from_url(
                     settings.redis_url.get_secret_value(), socket_timeout=1.0, decode_responses=True
                 )

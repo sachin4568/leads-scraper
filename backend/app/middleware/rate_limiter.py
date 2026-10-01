@@ -4,7 +4,10 @@ import logging
 import time
 from typing import Callable
 
-import redis
+try:
+    import redis
+except ImportError:
+    redis = None
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -27,13 +30,13 @@ class APIRateLimiterMiddleware(BaseHTTPMiddleware):
         self.ip_limit = ip_limit
         self.window_seconds = window_seconds
         self._memory_buckets: dict[str, list[float]] = {}
-        self._redis_client: redis.Redis | None = None
+        self._redis_client: Any = None
         self._init_redis()
 
     def _init_redis(self) -> None:
         try:
             settings = get_settings()
-            if settings.redis_url:
+            if redis and settings.redis_url:
                 client = redis.Redis.from_url(
                     settings.redis_url.get_secret_value(), socket_timeout=1.0, decode_responses=True
                 )

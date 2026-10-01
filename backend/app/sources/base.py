@@ -23,6 +23,12 @@ class NormalizedLeadRecord(BaseModel):
     city: str | None = None
     state: str | None = None
     country: str | None = None
+    country_code: str | None = None
+    region: str | None = None
+    postal_code: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+    formatted_address: str | None = None
     social_handles: dict[str, str] = Field(default_factory=dict)
     raw_data: dict[str, Any] = Field(default_factory=dict)
 

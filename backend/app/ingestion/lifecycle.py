@@ -4,6 +4,7 @@ import json
 import logging
 from enum import Enum
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.app.ingestion.identity import CanonicalIdentityEngine, IdentityConfidence
@@ -126,8 +127,25 @@ class LifecycleResolver:
                 match_explanation=json.dumps(match_exp.matched_signals),
             )
             db.add(obs)
-            db.commit()
-            return canonical, obs, LifecycleState.NEW
+            try:
+                db.commit()
+                return canonical, obs, LifecycleState.NEW
+            except IntegrityError:
+                db.rollback()
+                existing_obs = (
+                    db.query(LeadObservation)
+                    .filter(LeadObservation.idempotency_key == idempotency_key)
+                    .first()
+                )
+                if existing_obs:
+                    canonical = (
+                        db.query(CanonicalLead)
+                        .filter(CanonicalLead.id == existing_obs.canonical_lead_id)
+                        .first()
+                    )
+                    if canonical:
+                        return canonical, existing_obs, LifecycleState.DUPLICATE
+                return canonical, obs, LifecycleState.NEW
 
         # Existing Canonical Lead Matched (EXACT_MATCH or HIGH_CONFIDENCE_MATCH)
         if matched_canonical.is_temporary:

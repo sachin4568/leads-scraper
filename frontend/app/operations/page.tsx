@@ -2,6 +2,14 @@
 import { useState, useEffect, useRef } from 'react';
 import { api } from '../lib/api';
 import { LeadSheet, SERVICE_LABELS, ServiceType } from '../lib/data';
+import { ThreeDotMenu } from '../components/ThreeDotMenu';
+
+const I = {
+  edit: <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>,
+  download: <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>,
+  trash: <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3,6 5,6 21,6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>,
+  preview: <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>,
+};
 
 const COUNTRIES = [
   { code: 'US', name: 'United States' },
@@ -54,23 +62,123 @@ const NICHE_SUGGESTIONS: Record<string, string[]> = {
 };
 
 const REGION_CITIES: Record<string, string[]> = {
-  'Alabama': ['Birmingham', 'Montgomery', 'Mobile', 'Huntsville'],
-  'California': ['Los Angeles', 'San Francisco', 'San Diego', 'San Jose', 'Sacramento'],
-  'Texas': ['Austin', 'Houston', 'Dallas', 'San Antonio', 'Fort Worth'],
-  'New York': ['New York City', 'Buffalo', 'Rochester', 'Syracuse', 'Albany'],
-  'Florida': ['Miami', 'Orlando', 'Tampa', 'Jacksonville', 'Tallahassee'],
-  'England': ['London', 'Birmingham', 'Manchester', 'Leeds', 'Liverpool'],
-  'Scotland': ['Edinburgh', 'Glasgow', 'Aberdeen', 'Dundee'],
-  'Wales': ['Cardiff', 'Swansea', 'Newport'],
-  'Ontario': ['Toronto', 'Ottawa', 'Mississauga', 'Hamilton'],
-  'Quebec': ['Montreal', 'Quebec City', 'Laval', 'Gatineau'],
-  'British Columbia': ['Vancouver', 'Victoria', 'Burnaby', 'Surrey'],
-  'New South Wales': ['Sydney', 'Newcastle', 'Wollongong'],
-  'Victoria': ['Melbourne', 'Geelong', 'Ballarat'],
-  'Maharashtra': ['Mumbai', 'Pune', 'Nagpur', 'Thane'],
-  'Delhi': ['New Delhi', 'Dwarka', 'Rohini'],
-  'Karnataka': ['Bangalore', 'Mysore', 'Hubli'],
-  'Tamil Nadu': ['Chennai', 'Coimbatore', 'Madurai']
+  'Alabama': ['Birmingham', 'Montgomery', 'Mobile', 'Huntsville', 'Tuscaloosa'],
+  'Alaska': ['Anchorage', 'Fairbanks', 'Juneau', 'Sitka', 'Ketchikan'],
+  'Arizona': ['Phoenix', 'Tucson', 'Mesa', 'Chandler', 'Scottsdale', 'Glendale', 'Gilbert', 'Tempe'],
+  'Arkansas': ['Little Rock', 'Fort Smith', 'Fayetteville', 'Springdale', 'Jonesboro'],
+  'California': ['Los Angeles', 'San Francisco', 'San Diego', 'San Jose', 'Sacramento', 'Fresno', 'Long Beach', 'Oakland', 'Bakersfield', 'Anaheim', 'Irvine'],
+  'Colorado': ['Denver', 'Colorado Springs', 'Aurora', 'Fort Collins', 'Lakewood', 'Thornton', 'Arvada', 'Westminster', 'Pueblo', 'Boulder'],
+  'Connecticut': ['Bridgeport', 'New Haven', 'Stamford', 'Hartford', 'Waterbury', 'Norwalk', 'Danbury'],
+  'Delaware': ['Wilmington', 'Dover', 'Newark', 'Middletown', 'Smyrna'],
+  'Florida': ['Miami', 'Orlando', 'Tampa', 'Jacksonville', 'Tallahassee', 'St. Petersburg', 'Hialeah', 'Fort Lauderdale', 'Cape Coral', 'Gainesville'],
+  'Georgia': ['Atlanta', 'Augusta', 'Columbus', 'Macon', 'Savannah', 'Athens', 'Sandy Springs', 'Roswell'],
+  'Hawaii': ['Honolulu', 'Hilo', 'Kailua', 'Kapolei', 'Kaneohe'],
+  'Idaho': ['Boise', 'Meridian', 'Nampa', 'Idaho Falls', 'Caldwell', 'Pocatello'],
+  'Illinois': ['Chicago', 'Aurora', 'Naperville', 'Joliet', 'Rockford', 'Springfield', 'Elgin', 'Peoria', 'Champaign'],
+  'Indiana': ['Indianapolis', 'Fort Wayne', 'Evansville', 'South Bend', 'Carmel', 'Fishers', 'Bloomington'],
+  'Iowa': ['Des Moines', 'Cedar Rapids', 'Davenport', 'Sioux City', 'Iowa City', 'Waterloo', 'Ames'],
+  'Kansas': ['Wichita', 'Overland Park', 'Kansas City', 'Olathe', 'Topeka', 'Lawrence'],
+  'Kentucky': ['Louisville', 'Lexington', 'Bowling Green', 'Owensboro', 'Covington'],
+  'Louisiana': ['New Orleans', 'Baton Rouge', 'Shreveport', 'Lafayette', 'Lake Charles'],
+  'Maine': ['Portland', 'Lewiston', 'Bangor', 'South Portland', 'Auburn'],
+  'Maryland': ['Baltimore', 'Frederick', 'Rockville', 'Gaithersburg', 'Bowie', 'Annapolis'],
+  'Massachusetts': ['Boston', 'Worcester', 'Springfield', 'Cambridge', 'Lowell', 'Brockton', 'Quincy', 'Lynn'],
+  'Michigan': ['Detroit', 'Grand Rapids', 'Warren', 'Sterling Heights', 'Ann Arbor', 'Lansing', 'Flint'],
+  'Minnesota': ['Minneapolis', 'St. Paul', 'Rochester', 'Bloomington', 'Duluth', 'Brooklyn Park'],
+  'Mississippi': ['Jackson', 'Gulfport', 'Southaven', 'Biloxi', 'Hattiesburg'],
+  'Missouri': ['Kansas City', 'St. Louis', 'Springfield', 'Columbia', 'Independence'],
+  'Montana': ['Billings', 'Missoula', 'Great Falls', 'Bozeman', 'Helena'],
+  'Nebraska': ['Omaha', 'Lincoln', 'Bellevue', 'Grand Island', 'Kearney'],
+  'Nevada': ['Las Vegas', 'Henderson', 'Reno', 'North Las Vegas', 'Sparks', 'Carson City'],
+  'New Hampshire': ['Manchester', 'Nashua', 'Concord', 'Dover', 'Rochester'],
+  'New Jersey': ['Newark', 'Jersey City', 'Paterson', 'Elizabeth', 'Edison', 'Woodbridge', 'Lakewood', 'Trenton'],
+  'New Mexico': ['Albuquerque', 'Las Cruces', 'Rio Rancho', 'Santa Fe', 'Roswell'],
+  'New York': ['New York City', 'Buffalo', 'Rochester', 'Syracuse', 'Albany', 'Yonkers', 'White Plains'],
+  'North Carolina': ['Charlotte', 'Raleigh', 'Greensboro', 'Durham', 'Winston-Salem', 'Fayetteville', 'Cary', 'Wilmington'],
+  'North Dakota': ['Fargo', 'Bismarck', 'Grand Forks', 'Minot', 'West Fargo'],
+  'Ohio': ['Columbus', 'Cleveland', 'Cincinnati', 'Toledo', 'Akron', 'Dayton', 'Canton'],
+  'Oklahoma': ['Oklahoma City', 'Tulsa', 'Norman', 'Broken Arrow', 'Edmond', 'Lawton'],
+  'Oregon': ['Portland', 'Salem', 'Eugene', 'Gresham', 'Hillsboro', 'Beaverton', 'Bend'],
+  'Pennsylvania': ['Philadelphia', 'Pittsburgh', 'Allentown', 'Erie', 'Reading', 'Scranton', 'Lancaster', 'Harrisburg'],
+  'Rhode Island': ['Providence', 'Warwick', 'Cranston', 'Pawtucket', 'East Providence'],
+  'South Carolina': ['Charleston', 'Columbia', 'North Charleston', 'Mount Pleasant', 'Rock Hill', 'Greenville'],
+  'South Dakota': ['Sioux Falls', 'Rapid City', 'Aberdeen', 'Brookings', 'Watertown'],
+  'Tennessee': ['Nashville', 'Memphis', 'Knoxville', 'Chattanooga', 'Clarksville', 'Murfreesboro'],
+  'Texas': ['Houston', 'San Antonio', 'Dallas', 'Austin', 'Fort Worth', 'El Paso', 'Arlington', 'Corpus Christi', 'Plano', 'Lubbock', 'Irving', 'Frisco'],
+  'Utah': ['Salt Lake City', 'West Valley City', 'Provo', 'West Jordan', 'Orem', 'Sandy', 'Ogden'],
+  'Vermont': ['Burlington', 'South Burlington', 'Rutland', 'Barre', 'Montpelier'],
+  'Virginia': ['Virginia Beach', 'Norfolk', 'Chesapeake', 'Richmond', 'Newport News', 'Alexandria', 'Hampton', 'Roanoke'],
+  'Washington': ['Seattle', 'Spokane', 'Tacoma', 'Vancouver', 'Bellevue', 'Kent', 'Everett', 'Renton'],
+  'West Virginia': ['Charleston', 'Huntington', 'Morgantown', 'Parkersburg', 'Wheeling'],
+  'Wisconsin': ['Milwaukee', 'Madison', 'Green Bay', 'Kenosha', 'Racine', 'Appleton'],
+  'Wyoming': ['Cheyenne', 'Casper', 'Laramie', 'Gillette', 'Rock Springs'],
+  // UK
+  'England': ['London', 'Birmingham', 'Manchester', 'Leeds', 'Liverpool', 'Newcastle', 'Sheffield', 'Bristol', 'Leicester', 'Brighton', 'Coventry', 'Nottingham', 'Southampton', 'Oxford', 'Cambridge'],
+  'Scotland': ['Edinburgh', 'Glasgow', 'Aberdeen', 'Dundee', 'Inverness', 'Perth', 'Stirling'],
+  'Wales': ['Cardiff', 'Swansea', 'Newport', 'Wrexham', 'Barry'],
+  'Northern Ireland': ['Belfast', 'Derry', 'Lisburn', 'Newry', 'Bangor'],
+  // CA
+  'Ontario': ['Toronto', 'Ottawa', 'Mississauga', 'Hamilton', 'Brampton', 'London', 'Markham', 'Vaughan', 'Kitchener', 'Windsor'],
+  'Quebec': ['Montreal', 'Quebec City', 'Laval', 'Gatineau', 'Longueuil', 'Sherbrooke'],
+  'British Columbia': ['Vancouver', 'Victoria', 'Burnaby', 'Surrey', 'Richmond', 'Kelowna', 'Abbotsford'],
+  'Alberta': ['Calgary', 'Edmonton', 'Red Deer', 'Lethbridge', 'St. Albert'],
+  'Nova Scotia': ['Halifax', 'Sydney', 'Dartmouth', 'Truro'],
+  'Manitoba': ['Winnipeg', 'Brandon', 'Steinbach'],
+  'Saskatchewan': ['Saskatoon', 'Regina', 'Prince Albert'],
+  // AU
+  'New South Wales': ['Sydney', 'Newcastle', 'Wollongong', 'Central Coast', 'Maitland'],
+  'Victoria': ['Melbourne', 'Geelong', 'Ballarat', 'Bendigo', 'Shepparton'],
+  'Queensland': ['Brisbane', 'Gold Coast', 'Sunshine Coast', 'Townsville', 'Cairns', 'Toowoomba'],
+  'Western Australia': ['Perth', 'Mandurah', 'Bunbury', 'Geraldton'],
+  'South Australia': ['Adelaide', 'Mount Gambier', 'Gawler'],
+  'Tasmania': ['Hobart', 'Launceston', 'Devonport'],
+  'Australian Capital Territory': ['Canberra'],
+  'Northern Territory': ['Darwin', 'Alice Springs'],
+  // IN
+  'Maharashtra': ['Mumbai', 'Pune', 'Nagpur', 'Thane', 'Nashik', 'Aurangabad', 'Navi Mumbai', 'Solapur'],
+  'Delhi': ['New Delhi', 'Dwarka', 'Rohini', 'South Delhi', 'East Delhi', 'North Delhi', 'Noida', 'Gurgaon'],
+  'Karnataka': ['Bangalore', 'Mysore', 'Hubli', 'Mangalore', 'Belgaum', 'Davanagere'],
+  'Tamil Nadu': ['Chennai', 'Coimbatore', 'Madurai', 'Tiruchirappalli', 'Salem', 'Tirunelveli'],
+  'Telangana': ['Hyderabad', 'Warangal', 'Nizamabad', 'Karimnagar', 'Khammam'],
+  'Gujarat': ['Ahmedabad', 'Surat', 'Vadodara', 'Rajkot', 'Bhavnagar', 'Jamnagar'],
+  'Uttar Pradesh': ['Lucknow', 'Kanpur', 'Ghaziabad', 'Agra', 'Varanasi', 'Meerut', 'Noida', 'Prayagraj'],
+  'West Bengal': ['Kolkata', 'Howrah', 'Durgapur', 'Asansol', 'Siliguri'],
+  'Rajasthan': ['Jaipur', 'Jodhpur', 'Kota', 'Bikaner', 'Ajmer', 'Udaipur'],
+  'Punjab': ['Ludhiana', 'Amritsar', 'Jalandhar', 'Patiala', 'Bathinda'],
+  'Haryana': ['Gurgaon', 'Faridabad', 'Panipat', 'Ambala', 'Karnal'],
+  'Kerala': ['Thiruvananthapuram', 'Kochi', 'Kozhikode', 'Thrissur', 'Kollam'],
+  'Madhya Pradesh': ['Indore', 'Bhopal', 'Jabalpur', 'Gwalior', 'Ujjain'],
+  'Bihar': ['Patna', 'Gaya', 'Bhagalpur', 'Muzaffarpur'],
+  'Andhra Pradesh': ['Visakhapatnam', 'Vijayawada', 'Guntur', 'Nellore', 'Kurnool']
+};
+
+const COUNTRY_CITIES: Record<string, string[]> = {
+  US: [
+    'New York City', 'Los Angeles', 'Chicago', 'Houston', 'Phoenix', 'Philadelphia', 'San Antonio', 'San Diego',
+    'Dallas', 'San Jose', 'Austin', 'Jacksonville', 'Fort Worth', 'Columbus', 'Charlotte', 'San Francisco',
+    'Indianapolis', 'Seattle', 'Denver', 'Washington', 'Boston', 'El Paso', 'Nashville', 'Detroit', 'Oklahoma City',
+    'Portland', 'Las Vegas', 'Memphis', 'Louisville', 'Baltimore', 'Milwaukee', 'Albuquerque', 'Tucson', 'Fresno',
+    'Sacramento', 'Mesa', 'Kansas City', 'Atlanta', 'Omaha', 'Colorado Springs', 'Raleigh', 'Miami', 'Virginia Beach',
+    'Oakland', 'Minneapolis', 'Tulsa', 'Arlington', 'Tampa', 'New Orleans', 'Wichita', 'Cleveland', 'Bakersfield'
+  ],
+  UK: [
+    'London', 'Birmingham', 'Manchester', 'Leeds', 'Glasgow', 'Liverpool', 'Newcastle', 'Sheffield', 'Bristol',
+    'Belfast', 'Edinburgh', 'Leicester', 'Brighton', 'Cardiff', 'Coventry', 'Nottingham', 'Hull', 'Plymouth',
+    'Stoke-on-Trent', 'Derby', 'Southampton', 'Reading', 'Swansea', 'Aberdeen', 'Dundee', 'Oxford', 'Cambridge'
+  ],
+  CA: [
+    'Toronto', 'Montreal', 'Vancouver', 'Calgary', 'Edmonton', 'Ottawa', 'Winnipeg', 'Quebec City', 'Hamilton',
+    'Kitchener', 'London', 'Victoria', 'Halifax', 'Oshawa', 'Windsor', 'Saskatoon', 'Regina', 'St. John\'s', 'Kelowna', 'Barrie'
+  ],
+  AU: [
+    'Sydney', 'Melbourne', 'Brisbane', 'Perth', 'Adelaide', 'Gold Coast', 'Newcastle', 'Canberra', 'Sunshine Coast',
+    'Wollongong', 'Geelong', 'Hobart', 'Townsville', 'Cairns', 'Darwin', 'Toowoomba', 'Ballarat', 'Bendigo'
+  ],
+  IN: [
+    'Mumbai', 'Delhi', 'New Delhi', 'Bangalore', 'Hyderabad', 'Ahmedabad', 'Chennai', 'Kolkata', 'Surat', 'Pune',
+    'Jaipur', 'Lucknow', 'Kanpur', 'Nagpur', 'Indore', 'Thane', 'Bhopal', 'Visakhapatnam', 'Patna', 'Vadodara',
+    'Ghaziabad', 'Ludhiana', 'Agra', 'Nashik', 'Ranchi', 'Faridabad', 'Meerut', 'Rajkot', 'Varanasi', 'Noida', 'Gurgaon'
+  ]
 };
 
 const SERVICES = [
@@ -89,44 +197,6 @@ const formatDate = (dateStr: string) => {
 };
 
 
-class ScraperParticle {
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-  size: number;
-  color: string;
-  alpha: number;
-  decay: number;
-
-  constructor(x: number, y: number) {
-    this.x = x;
-    this.y = y;
-    this.vx = (Math.random() - 0.5) * 5;
-    this.vy = -(Math.random() * 4 + 2);
-    this.size = Math.random() * 3 + 1;
-    this.alpha = 1.0;
-    this.decay = Math.random() * 0.02 + 0.015;
-    this.color = Math.random() > 0.5 ? '#ec4899' : '#a855f7'; // pink and purple
-  }
-
-  update() {
-    this.x += this.vx;
-    this.y += this.vy;
-    this.alpha -= this.decay;
-  }
-
-  draw(ctx: CanvasRenderingContext2D) {
-    ctx.save();
-    ctx.globalAlpha = Math.max(0, this.alpha);
-    ctx.fillStyle = this.color;
-    ctx.beginPath();
-    ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-  }
-}
-
 export default function OperationsPage() {
   const [niche, setNiche] = useState(NICHES[0]);
   const [country, setCountry] = useState('US');
@@ -134,7 +204,7 @@ export default function OperationsPage() {
   const [city, setCity] = useState('');
   const [service, setService] = useState('website_dev');
   const [count, setCount] = useState('100');
-  const [selectedSources, setSelectedSources] = useState<string[]>(['google_maps']);
+  const [selectedSources, setSelectedSources] = useState<string[]>(['google_maps', 'osm_overpass']);
   
   // Advanced Scraper Options
   const [customCount, setCustomCount] = useState('');
@@ -174,18 +244,26 @@ export default function OperationsPage() {
   const [paused, setPaused] = useState(false);
   const [savedCountWhenStopped, setSavedCountWhenStopped] = useState<number | null>(null);
   const [creatingJob, setCreatingJob] = useState(false);
-  
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const formContainerRef = useRef<HTMLDivElement | null>(null);
-  const [isDisintegrating, setIsDisintegrating] = useState(false);
 
-  // Load presets/recents from localStorage on mount
+
+  // Load presets/recents and URL query parameters on mount
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const savedPresets = localStorage.getItem('lead_scraper_presets');
       if (savedPresets) setPresets(JSON.parse(savedPresets));
       const savedRecents = localStorage.getItem('lead_scraper_recent_searches');
       if (savedRecents) setRecentSearches(JSON.parse(savedRecents));
+
+      const params = new URLSearchParams(window.location.search);
+      const urlNiche = params.get('niche');
+      const urlCity = params.get('city');
+      if (urlNiche) {
+        setNiche(urlNiche);
+        setCategories([urlNiche]);
+      }
+      if (urlCity) {
+        setCity(urlCity);
+      }
     }
   }, []);
 
@@ -197,6 +275,7 @@ export default function OperationsPage() {
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [scrapeError, setScrapeError] = useState<string | null>(null);
   const [scrapeStatus, setScrapeStatus] = useState<'idle' | 'running' | 'completed' | 'partial' | 'cancelled' | 'failed' | 'cancelling' | 'stopped_saved'>('idle');
+  const [completionReason, setCompletionReason] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
   // Workflow Sheets
@@ -204,6 +283,24 @@ export default function OperationsPage() {
   const [selectedRawId, setSelectedRawId] = useState<string | null>(null);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const [segregating, setSegregating] = useState(false);
+
+  // In-Screen Delete Confirmation Modal State
+  const [sheetToDelete, setSheetToDelete] = useState<any | null>(null);
+  const [isDeletingSheet, setIsDeletingSheet] = useState(false);
+  const [deleteSheetError, setDeleteSheetError] = useState<string | null>(null);
+
+  // Dropdown click-outside refs & state
+  const presetRef = useRef<HTMLDivElement>(null);
+  const nicheRef = useRef<HTMLDivElement>(null);
+  const cityRef = useRef<HTMLDivElement>(null);
+  const countryRef = useRef<HTMLDivElement>(null);
+  const regionRef = useRef<HTMLDivElement>(null);
+  const serviceRef = useRef<HTMLDivElement>(null);
+
+  const [showCountryDropdown, setShowCountryDropdown] = useState(false);
+  const [showRegionDropdown, setShowRegionDropdown] = useState(false);
+  const [regionSearchQuery, setRegionSearchQuery] = useState('');
+  const [showServiceDropdown, setShowServiceDropdown] = useState(false);
 
   // Rename modal state
   const [showRenameModal, setShowRenameModal] = useState(false);
@@ -225,6 +322,7 @@ export default function OperationsPage() {
 
   // Preview raw sheet modal state
   const [openRawSheet, setOpenRawSheet] = useState<any>(null);
+  const [isRawFullScreen, setIsRawFullScreen] = useState<boolean>(false);
   const [previewLeads, setPreviewLeads] = useState<any[]>([]);
   const [loadingPreview, setLoadingPreview] = useState(false);
 
@@ -234,6 +332,33 @@ export default function OperationsPage() {
 
   // Scroll target ref for View Leads
   const tableRef = useRef<HTMLDivElement>(null);
+
+  // Click outside handler for custom dropdowns
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (presetRef.current && !presetRef.current.contains(target)) {
+        setShowPresetDropdown(false);
+      }
+      if (nicheRef.current && !nicheRef.current.contains(target)) {
+        setShowNicheDropdown(false);
+      }
+      if (cityRef.current && !cityRef.current.contains(target)) {
+        setShowCityDropdown(false);
+      }
+      if (countryRef.current && !countryRef.current.contains(target)) {
+        setShowCountryDropdown(false);
+      }
+      if (regionRef.current && !regionRef.current.contains(target)) {
+        setShowRegionDropdown(false);
+      }
+      if (serviceRef.current && !serviceRef.current.contains(target)) {
+        setShowServiceDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   // Load raw sheets from database
   const loadRawSheets = () => {
@@ -346,21 +471,14 @@ export default function OperationsPage() {
           failed: prog.failed || prog.failed_count || 0
         });
 
-        // Set micro-status dynamically based on backend source & query
+        // Set micro-status dynamically based on true backend stage & query
         if (prog.status === 'RUNNING' || prog.status === 'PENDING') {
-          if (prog.current_source || prog.current_query) {
-            setMicroStatus(`Retrieving from ${prog.current_source || 'Google Maps'} - "${prog.current_query || prog.niche}"`);
+          if (prog.current_source) {
+            setMicroStatus(prog.current_source);
+          } else if (prog.current_query) {
+            setMicroStatus(`Querying directory for "${prog.current_query}"...`);
           } else {
-            const steps = [
-              "Connecting to Google Places API...",
-              "Querying local directory coordinates...",
-              "Extracting business contact records...",
-              "Verifying website & email structures...",
-              "Calculating ML qualification scores...",
-              "Persisting leads in canonical store..."
-            ];
-            const idx = Math.floor((Date.now() - startTime) / 3000) % steps.length;
-            setMicroStatus(steps[idx]);
+            setMicroStatus(`Connecting to discovery providers for "${prog.niche || 'leads'}"...`);
           }
         }
 
@@ -411,9 +529,15 @@ export default function OperationsPage() {
         // Update estimated time
         const elapsed = (Date.now() - startTime) / 1000;
         const target = prog.requested || parseInt(count, 10) || 100;
-        if (prog.leads_scraped && prog.leads_scraped > 0) {
-          const speed = prog.leads_scraped / (elapsed || 1); // leads per second
-          setRemainingTime(Math.max(0, Math.ceil((target - prog.leads_scraped) / speed)));
+        const currentCount = prog.leads_scraped || prog.discovered || 0;
+        if (currentCount > 0 && elapsed > 1) {
+          const speed = currentCount / elapsed; // items per second
+          const remainingItems = Math.max(0, target - currentCount);
+          setRemainingTime(Math.max(1, Math.ceil(remainingItems / speed)));
+        } else if (prog.progress_percent && prog.progress_percent > 3 && elapsed > 1) {
+          const totalEstimated = elapsed / (prog.progress_percent / 100);
+          const remainingSecs = Math.max(1, Math.ceil(totalEstimated - elapsed));
+          setRemainingTime(remainingSecs);
         } else {
           setRemainingTime(-1); // will show "Estimating..."
         }
@@ -423,6 +547,7 @@ export default function OperationsPage() {
           localStorage.removeItem('lead_system_active_scrape_run');
           setActiveJobId(null);
           setScrapeStatus(prog.status.toLowerCase() as any);
+          setCompletionReason(prog.completion_reason || null);
           setRunning(false);
           setPaused(false);
           loadRawSheets();
@@ -430,8 +555,10 @@ export default function OperationsPage() {
           logScrapeHistory(jobId, prog.niche, prog.region, prog.requested, prog.leads_scraped, prog.status.toLowerCase());
 
           const msg = prog.status === 'COMPLETED' 
-            ? `${prog.leads_scraped} leads scraped successfully.` 
-            : `${prog.leads_scraped} leads scraped. Source returned no additional valid leads.`;
+            ? (prog.completion_reason === 'REGION_EXHAUSTED'
+                ? `${prog.leads_scraped} leads found. Region exhausted (no additional matching businesses).`
+                : `${prog.leads_scraped} leads scraped successfully (Target Reached).`)
+            : `${prog.leads_scraped} leads scraped. Some discovery provider requests failed.`;
           addNotification(msg, jobId);
 
           // Only show the rename modal ONCE per job (prevents duplicate popups from recovery
@@ -441,7 +568,7 @@ export default function OperationsPage() {
             const defaultName = `${prog.niche} - ${city || 'Capital'}, ${prog.region} (${COUNTRIES.find(c => c.code === country)?.name || country})`;
             setPendingRawSheet({
               id: jobId,
-              sheetId: prog.sheetId || `RLD-001`,
+              sheetId: prog.sheetId || '0001',
               name: defaultName,
               service: prog.service,
               country: country,
@@ -464,46 +591,117 @@ export default function OperationsPage() {
     pollingIntervalRef.current = intervalId;
   };
 
-  // Mount recovery
+  // Restore active running scrape on page refresh / mount
   useEffect(() => {
-    const activeRun = localStorage.getItem('lead_system_active_scrape_run');
-    if (activeRun) {
-      try {
-        const { runId } = JSON.parse(activeRun);
-        if (runId) {
-          api.getScrapeProgress(runId)
-            .then(prog => {
-              if (prog.status === 'PENDING' || prog.status === 'RUNNING') {
-                // Restore parameters
-                const recoveredNiche = prog.niche && prog.niche.includes(' - ') ? prog.niche.split(' - ')[0].trim() : prog.niche;
-                setNiche(recoveredNiche || NICHES[0]);
-                setCountry(prog.country || 'US');
-                setRegion(prog.region || '');
-                setService(prog.service || 'website_dev');
-                setCount(String(prog.requested || 100));
-                
-                // Start polling
-                startPollingProgress(runId);
-              } else {
-                localStorage.removeItem('lead_system_active_scrape_run');
-                setScrapeStatus(prog.status.toLowerCase() as any);
-                setScrapedCount(prog.leads_scraped || 0);
-                setProgress(prog.progress_percent || 0);
-                if (prog.status === 'FAILED') {
-                  setScrapeError(prog.error_message || 'Connection failed');
-                }
-              }
-            })
-            .catch(err => {
-              console.error("Failed to recover active run", err);
-              localStorage.removeItem('lead_system_active_scrape_run');
-            });
+    if (typeof window === 'undefined') return;
+
+    const restoreActiveJob = async () => {
+      let targetJobId: string | null = null;
+
+      // 1. Check localStorage first
+      const activeRunStr = localStorage.getItem('lead_system_active_scrape_run');
+      if (activeRunStr) {
+        try {
+          const parsed = JSON.parse(activeRunStr);
+          if (parsed && parsed.runId) {
+            targetJobId = parsed.runId;
+          }
+        } catch {
+          // ignore
         }
-      } catch (e) {
-        console.error("Failed to parse active run JSON", e);
-        localStorage.removeItem('lead_system_active_scrape_run');
       }
-    }
+
+      // 2. If found in localStorage, verify with backend
+      if (targetJobId) {
+        try {
+          const prog = await api.getScrapeProgress(targetJobId);
+          if (prog && (prog.status === 'RUNNING' || prog.status === 'PENDING')) {
+            setActiveJobId(targetJobId);
+            setRunning(true);
+            setScrapeStatus('running');
+            setProgress(prog.progress_percent || 0);
+            setScrapedCount(prog.leads_scraped || 0);
+            if (prog.niche) {
+              setNiche(prog.niche);
+              setCategories([prog.niche]);
+            }
+            if (prog.city || prog.state) {
+              const loc = prog.city || prog.state;
+              setCity(loc);
+              setLocations([loc]);
+            }
+            if (prog.country) {
+              const cMatch = COUNTRIES.find(c => c.name === prog.country || c.code === prog.country || (prog.country === 'GB' && c.code === 'UK'));
+              if (cMatch) setCountry(cMatch.code);
+            }
+            if (prog.requested) {
+              setCount(prog.requested.toString());
+              if (!['10', '25', '50', '100', '200', '500'].includes(prog.requested.toString())) {
+                setCount('custom');
+                setCustomCount(prog.requested.toString());
+              }
+            }
+            startPollingProgress(targetJobId);
+            return;
+          } else if (prog && (prog.status === 'COMPLETED' || prog.status === 'PARTIAL' || prog.status === 'STOPPED_SAVED')) {
+            setScrapedCount(prog.leads_scraped || 0);
+            setProgress(100);
+            setScrapeStatus(prog.status.toLowerCase() as any);
+            localStorage.removeItem('lead_system_active_scrape_run');
+            loadRawSheets();
+            return;
+          } else {
+            localStorage.removeItem('lead_system_active_scrape_run');
+          }
+        } catch {
+          localStorage.removeItem('lead_system_active_scrape_run');
+        }
+      }
+
+      // 3. Fallback: Check if any recent sheet in database is currently RUNNING
+      try {
+        const rawList = await api.getRawLeads();
+        const now = new Date().getTime();
+        const activeSheet = (rawList as any || []).find((s: any) => {
+          if (s.status !== 'RUNNING' && s.status !== 'PENDING') return false;
+          if (!s.created_at) return true;
+          const jobTime = new Date(s.created_at).getTime();
+          return (now - jobTime) < 12 * 60 * 60 * 1000; // Only auto-restore jobs less than 12h old
+        });
+        if (activeSheet && activeSheet.id) {
+          setActiveJobId(activeSheet.id);
+          setRunning(true);
+          setScrapeStatus('running');
+          setProgress(activeSheet.progress_percent || 0);
+          setScrapedCount(activeSheet.leads_scraped || 0);
+          if (activeSheet.niche) {
+            setNiche(activeSheet.niche);
+            setCategories([activeSheet.niche]);
+          }
+          if (activeSheet.city || activeSheet.state) {
+            const loc = activeSheet.city || activeSheet.state;
+            setCity(loc);
+            setLocations([loc]);
+          }
+          if (activeSheet.country) {
+            const cMatch = COUNTRIES.find(c => c.name === activeSheet.country || c.code === activeSheet.country || (activeSheet.country === 'GB' && c.code === 'UK'));
+            if (cMatch) setCountry(cMatch.code);
+          }
+          if (activeSheet.target_lead_count) {
+            setCount(activeSheet.target_lead_count.toString());
+            if (!['10', '25', '50', '100', '200', '500'].includes(activeSheet.target_lead_count.toString())) {
+              setCount('custom');
+              setCustomCount(activeSheet.target_lead_count.toString());
+            }
+          }
+          startPollingProgress(activeSheet.id);
+        }
+      } catch {
+        // ignore
+      }
+    };
+
+    restoreActiveJob();
   }, []);
 
   // Polling unmount cleanup
@@ -512,20 +710,6 @@ export default function OperationsPage() {
       stopPolling();
     };
   }, []);
-
-  // Backend recovery
-  useEffect(() => {
-    const runningJob = rawSheets.find(s => (s as any).status === 'RUNNING' || (s as any).status === 'PENDING') as any;
-    if (runningJob && !running && !activeJobId) {
-      const recoveredNiche = runningJob.niche && runningJob.niche.includes(' - ') ? runningJob.niche.split(' - ')[0].trim() : runningJob.niche;
-      setNiche(recoveredNiche);
-      setCountry(runningJob.country);
-      setRegion(runningJob.region);
-      setService(runningJob.service);
-      setCount(String(runningJob.target_lead_count));
-      startPollingProgress(runningJob.id);
-    }
-  }, [rawSheets]);
 
   const [enrichmentOptions, setEnrichmentOptions] = useState<Record<string, boolean>>({
     email: true,
@@ -656,75 +840,21 @@ export default function OperationsPage() {
     setShowResetConfirm(false);
   };
 
-  const triggerDisintegrationEffect = () => {
-    if (!canvasRef.current || !formContainerRef.current) return;
-    const canvas = canvasRef.current;
-    const container = formContainerRef.current;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const rect = container.getBoundingClientRect();
-    canvas.width = rect.width;
-    canvas.height = rect.height;
-
-    // Find all controls to originate particles from their specific locations
-    const controls = container.querySelectorAll('input, select, button, div[style*="border"]');
-    const newParticles: ScraperParticle[] = [];
-    
-    controls.forEach(ctrl => {
-      const elRect = ctrl.getBoundingClientRect();
-      const xOffset = elRect.left - rect.left;
-      const yOffset = elRect.top - rect.top;
-      
-      // Spawn particles within each control's bounding box
-      const step = 12;
-      for (let x = 0; x < elRect.width; x += step) {
-        for (let y = 0; y < elRect.height; y += step) {
-          if (Math.random() > 0.3) {
-            newParticles.push(new ScraperParticle(xOffset + x, yOffset + y));
-          }
-        }
-      }
-    });
-
-    // Fallback if no controls found
-    if (newParticles.length === 0) {
-      const step = 20;
-      for (let x = 0; x < rect.width; x += step) {
-        for (let y = 0; y < rect.height; y += step) {
-          newParticles.push(new ScraperParticle(x, y));
-        }
-      }
-    }
-
-    let animationFrameId: number;
-    const startTime = Date.now();
-
-    const render = () => {
-      const elapsed = Date.now() - startTime;
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      
-      newParticles.forEach(p => {
-        p.update();
-        p.draw(ctx);
-      });
-
-      if (elapsed < 600) {
-        animationFrameId = requestAnimationFrame(render);
-      } else {
-        cancelAnimationFrame(animationFrameId);
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-      }
-    };
-
-    render();
+  const handleBackToControls = () => {
+    stopPolling();
+    setRunning(false);
+    setProgress(0);
+    setScrapedCount(0);
+    setScrapeStatus('idle');
+    setScrapeError(null);
+    setActiveJobId(null);
+    setCreatingJob(false);
+    setPaused(false);
+    loadRawSheets();
   };
 
   const handleStartScrape = async () => {
-    // Prevent starting concurrent scrapes
-    const active = rawSheets.find(s => (s as any).status === 'RUNNING' || (s as any).status === 'PENDING');
-    if (active) {
-      addNotification("A scrape is already running. You can recover it or wait for it to complete.", active.id);
+    if (running || creatingJob) {
       return;
     }
 
@@ -759,10 +889,12 @@ export default function OperationsPage() {
     setRemainingTime(-1); // Estimating...
 
     try {
+      const selectedCountryName = COUNTRIES.find(c => c.code === country)?.name || country;
       const res = await api.startScrape({
         niche: nVal,
         city: locVal,
         region: region,
+        country: selectedCountryName,
         count: totalCount,
         service: service,
         sources: selectedSources,
@@ -784,12 +916,14 @@ export default function OperationsPage() {
         return;
       }
 
+      setActiveJobId(jobId);
       setRunning(true);
       setProgress(0);
       setScrapedCount(0);
       setScrapeStatus('running');
       setScrapeError(null);
       setPaused(false);
+      setCreatingJob(false);
 
       // Store configuration to recent searches
       const newSearch = {
@@ -823,22 +957,14 @@ export default function OperationsPage() {
       setRecentSearches(updatedRecents);
       localStorage.setItem('lead_scraper_recent_searches', JSON.stringify(updatedRecents));
 
-      // Trigger disintegration visual effect
-      setIsDisintegrating(true);
-      triggerDisintegrationEffect();
+      startPollingProgress(jobId);
 
-      // Wait for disintegration animation to finish (600ms) before swapping UI
-      setTimeout(() => {
-        setIsDisintegrating(false);
-        startPollingProgress(jobId);
-      }, 600);
-
-    } catch (err) {
+    } catch (err: any) {
       console.error("Failed to start scrape", err);
       setCreatingJob(false);
       setRunning(false);
       setScrapeStatus('failed');
-      setScrapeError("Failed to initiate scraper. Connection refused.");
+      setScrapeError(err?.message || "Failed to initiate scraper. Connection refused.");
     }
   };
 
@@ -885,6 +1011,68 @@ export default function OperationsPage() {
       setActiveJobId(null);
       localStorage.removeItem('lead_system_active_scrape_run');
       loadRawSheets();
+    }
+  };
+
+  const handleOpenRenameModal = (sheet: any) => {
+    setPendingRawSheet(sheet);
+    setRenameInput(sheet.name);
+    setShowRenameModal(true);
+  };
+
+  const handleExportSheet = async (sheet: any) => {
+    try {
+      const leads = await api.getJobLeads(sheet.id);
+      if (!leads || leads.length === 0) {
+        alert('This sheet has 0 leads to export.');
+        return;
+      }
+      const headers = ['Lead ID', 'Business Name', 'Location', 'Website', 'Phone', 'Email', 'Opportunity Category', 'Opportunity Score'];
+      const rows = leads.map((l: any, idx: number) => [
+        `RAW-${idx + 1}`,
+        `"${(l.businessName || l.business_name || '').replace(/"/g, '""')}"`,
+        `"${(l.location || '').replace(/"/g, '""')}"`,
+        `"${(l.websiteUrl || l.website || '').replace(/"/g, '""')}"`,
+        `"${(l.contactPhone || l.phone || '').replace(/"/g, '""')}"`,
+        `"${(l.contactEmail || l.email || '').replace(/"/g, '""')}"`,
+        `"${(l.opportunity_category || '').replace(/"/g, '""')}"`,
+        l.opportunity_score || ''
+      ]);
+      const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `${(sheet.name || 'leads').replace(/[^a-zA-Z0-9_-]/g, '_')}_leads.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error('Failed to export sheet:', e);
+      alert('Failed to export lead sheet');
+    }
+  };
+
+  const handleDeleteSheet = (sheet: any) => {
+    setDeleteSheetError(null);
+    setSheetToDelete(sheet);
+  };
+
+  const confirmDeleteSheet = async () => {
+    if (!sheetToDelete) return;
+    setIsDeletingSheet(true);
+    setDeleteSheetError(null);
+    try {
+      await api.deleteRawSheet(sheetToDelete.id);
+      if (selectedRawId === sheetToDelete.id) setSelectedRawId(null);
+      loadRawSheets();
+      setSheetToDelete(null);
+    } catch (e: any) {
+      console.error('Failed to delete sheet:', e);
+      setDeleteSheetError(e?.message || 'Failed to delete sheet. Please try again.');
+    } finally {
+      setIsDeletingSheet(false);
     }
   };
 
@@ -984,42 +1172,26 @@ export default function OperationsPage() {
 
       {/* ── Scrape Controls Card ── */}
       <div 
-        ref={formContainerRef}
         style={{ 
           background: 'var(--bg-surface)', 
           border: '1px solid var(--border-faint)', 
           borderRadius: 'var(--r-xl)', 
-          padding: '24px', 
-          marginBottom: 24, 
+          padding: scrapeStatus === 'idle' ? '24px' : '14px 20px', 
+          marginBottom: scrapeStatus === 'idle' ? 24 : 16, 
           position: 'relative',
           overflow: 'hidden',
+          boxShadow: '0 2px 10px rgba(0,0,0,0.02)',
           transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)'
         }}
       >
-        {/* Particle Canvas Overlay for disintegration effect */}
-        <canvas 
-          ref={canvasRef} 
-          style={{ 
-            position: 'absolute', 
-            top: 0, 
-            left: 0, 
-            width: '100%', 
-            height: '100%', 
-            pointerEvents: 'none', 
-            zIndex: 10 
-          }} 
-        />
-
-        <div style={{ opacity: isDisintegrating ? 0 : 1, transition: 'opacity 0.3s ease' }}>
-          
-          {/* Header & Presets row */}
+        {/* Header & Presets row */}
+        {scrapeStatus === 'idle' && (
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginBottom: 18, borderBottom: '1px solid var(--border-faint)', paddingBottom: 12 }}>
             <div style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.09em', color: 'var(--text-4)' }}>Scrape Controls</div>
             
-            {scrapeStatus === 'idle' && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                {/* ⋯ Presets Menu */}
-                <div style={{ position: 'relative' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              {/* ⋯ Presets Menu */}
+              <div ref={presetRef} style={{ position: 'relative' }}>
                   <button
                     onClick={() => setShowPresetDropdown(!showPresetDropdown)}
                     title="Presets"
@@ -1102,10 +1274,10 @@ export default function OperationsPage() {
                       )}
                     </div>
                   )}
-                </div>
               </div>
-            )}
+            </div>
           </div>
+        )}
 
           {scrapeStatus === 'idle' ? (
             /* ==========================================
@@ -1114,7 +1286,7 @@ export default function OperationsPage() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
               
               {/* Core Selector Controls - ROW 1: Categories / Country / Region */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px 20px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '16px 20px' }}>
                 
                   {/* Categories Input */}
                   <div style={{ position: 'relative', display: 'flex', flexDirection: 'column' }}>
@@ -1136,69 +1308,113 @@ export default function OperationsPage() {
                         style={{ ...inputStyle, width: '100%', borderColor: validationErrors.niche ? 'var(--pink)' : 'var(--border-subtle)' }}
                       />
                     ) : (
-                      <div style={{ position: 'relative' }}>
-                        <div style={{ display: 'flex', flexWrap: 'nowrap', overflow: 'hidden', gap: 6, background: 'var(--bg-input)', border: `1px solid ${validationErrors.niche ? 'var(--pink)' : 'var(--border-subtle)'}`, borderRadius: 'var(--r-md)', padding: '6px 8px', minHeight: 38, alignItems: 'center' }}>
+                      <div ref={nicheRef} style={{ position: 'relative' }}>
+                        <div 
+                          onClick={() => setShowNicheDropdown(true)}
+                          style={{ display: 'flex', flexWrap: 'nowrap', overflow: 'hidden', gap: 6, background: 'var(--bg-input)', border: `1px solid ${validationErrors.niche ? 'var(--pink)' : 'var(--border-subtle)'}`, borderRadius: 'var(--r-md)', padding: '6px 8px', minHeight: 38, alignItems: 'center', cursor: 'text' }}
+                        >
                           {categories.slice(0, 2).map(cat => (
                             <span key={cat} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: 'rgba(192, 132, 252, 0.2)', backdropFilter: 'blur(4px)', border: '1px solid rgba(192, 132, 252, 0.4)', borderRadius: 4, padding: '2px 6px', fontSize: '12px', color: 'var(--text-1)', whiteSpace: 'nowrap' }}>
                               {cat}
-                              <button onClick={() => setCategories(categories.filter(c => c !== cat))} style={{ background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer', padding: 0, fontSize: '14px', lineHeight: 1 }}>×</button>
+                              <button onClick={(e) => { e.stopPropagation(); setCategories(categories.filter(c => c !== cat)); }} style={{ background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer', padding: 0, fontSize: '14px', lineHeight: 1 }}>×</button>
                             </span>
                           ))}
                           {categories.length > 2 && (
-                            <span onClick={() => setShowNicheDropdown(true)} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: 'rgba(192, 132, 252, 0.2)', backdropFilter: 'blur(4px)', border: '1px solid rgba(192, 132, 252, 0.4)', borderRadius: 4, padding: '2px 6px', fontSize: '12px', color: 'var(--text-1)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                            <span onClick={(e) => { e.stopPropagation(); setShowNicheDropdown(true); }} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: 'rgba(192, 132, 252, 0.2)', backdropFilter: 'blur(4px)', border: '1px solid rgba(192, 132, 252, 0.4)', borderRadius: 4, padding: '2px 6px', fontSize: '12px', color: 'var(--text-1)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
                               +{categories.length - 2}
                             </span>
                           )}
                           <input 
                             type="text" 
                             value={nicheSearchQuery}
+                            placeholder={categories.length === 0 ? "Search or add category..." : ""}
                             onChange={e => {
                               setNicheSearchQuery(e.target.value);
                               setShowNicheDropdown(true);
                             }}
                             onFocus={() => setShowNicheDropdown(true)}
-                            style={{ background: 'transparent', border: 'none', color: 'var(--text-1)', fontSize: '13px', outline: 'none', flex: 1, minWidth: 60 }}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter' && nicheSearchQuery.trim()) {
+                                e.preventDefault();
+                                if (!categories.includes(nicheSearchQuery.trim())) {
+                                  setCategories([...categories, nicheSearchQuery.trim()]);
+                                }
+                                setNicheSearchQuery('');
+                                setShowNicheDropdown(false);
+                              }
+                            }}
+                            style={{ background: 'transparent', border: 'none', color: 'var(--text-1)', fontSize: '13px', outline: 'none', flex: 1, minWidth: 80 }}
                           />
                         </div>
                         
-                        {showNicheDropdown && (
-                          <div style={{
-                            position: 'absolute', top: '100%', left: 0, right: 0,
-                            background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
-                            borderRadius: 'var(--r-md)', zIndex: 100, maxHeight: 180, overflowY: 'auto',
-                            marginTop: 4, boxShadow: 'var(--shadow-drop)'
-                          }}
-                          onMouseLeave={() => setShowNicheDropdown(false)}
-                          >
-                            {categories.map(cat => (
-                              <div
-                                key={`sel-${cat}`}
-                                onClick={() => setCategories(categories.filter(c => c !== cat))}
-                                style={{ padding: '8px 12px', cursor: 'pointer', fontSize: '13px', color: 'var(--text-1)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(192, 132, 252, 0.05)' }}
-                                onMouseEnter={e => e.currentTarget.style.background = 'rgba(192, 132, 252, 0.1)'}
-                                onMouseLeave={e => e.currentTarget.style.background = 'rgba(192, 132, 252, 0.05)'}
-                              >
-                                {cat}
-                                <span style={{ color: 'var(--text-3)', fontSize: '14px' }}>×</span>
-                              </div>
-                            ))}
-                            {(NICHES || []).filter(c => c.toLowerCase().includes(nicheSearchQuery.toLowerCase()) && !categories.includes(c)).map(c => (
-                              <div
-                                key={c}
-                                onClick={() => {
-                                  setCategories([...categories, c]);
-                                  setNicheSearchQuery('');
-                                  setShowNicheDropdown(false);
-                                }}
-                                style={{ padding: '8px 12px', cursor: 'pointer', fontSize: '13px', color: 'var(--text-2)' }}
-                                onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-hover)'}
-                                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
-                              >
-                                {c}
-                              </div>
-                            ))}
-                          </div>
-                        )}
+                        {showNicheDropdown && (() => {
+                          const availableNiches = Array.from(new Set([
+                            ...NICHES,
+                            ...Object.values(NICHE_SUGGESTIONS).flat()
+                          ]));
+                          const filteredNiches = availableNiches.filter(
+                            c => c.toLowerCase().includes(nicheSearchQuery.toLowerCase()) && !categories.includes(c)
+                          );
+
+                          return (
+                            <div style={{
+                              position: 'absolute', top: '100%', left: 0, right: 0,
+                              background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+                              borderRadius: 'var(--r-md)', zIndex: 100, maxHeight: 220, overflowY: 'auto',
+                              marginTop: 4, boxShadow: 'var(--shadow-drop)'
+                            }}>
+                              {nicheSearchQuery.trim() && !categories.includes(nicheSearchQuery.trim()) && !filteredNiches.some(c => c.toLowerCase() === nicheSearchQuery.trim().toLowerCase()) && (
+                                <div
+                                  onClick={() => {
+                                    setCategories([...categories, nicheSearchQuery.trim()]);
+                                    setNicheSearchQuery('');
+                                    setShowNicheDropdown(false);
+                                  }}
+                                  style={{ padding: '8px 12px', cursor: 'pointer', fontSize: '13px', color: 'var(--pink)', fontWeight: 600, borderBottom: '1px solid var(--border-faint)', background: 'rgba(236,72,153,0.06)' }}
+                                  onMouseEnter={e => e.currentTarget.style.background = 'rgba(236,72,153,0.12)'}
+                                  onMouseLeave={e => e.currentTarget.style.background = 'rgba(236,72,153,0.06)'}
+                                >
+                                  + Add &ldquo;{nicheSearchQuery.trim()}&rdquo;
+                                </div>
+                              )}
+
+                              {categories.map(cat => (
+                                <div
+                                  key={`sel-${cat}`}
+                                  onClick={() => setCategories(categories.filter(c => c !== cat))}
+                                  style={{ padding: '8px 12px', cursor: 'pointer', fontSize: '13px', color: 'var(--text-1)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(192, 132, 252, 0.05)' }}
+                                  onMouseEnter={e => e.currentTarget.style.background = 'rgba(192, 132, 252, 0.1)'}
+                                  onMouseLeave={e => e.currentTarget.style.background = 'rgba(192, 132, 252, 0.05)'}
+                                >
+                                  {cat}
+                                  <span style={{ color: 'var(--text-3)', fontSize: '14px' }}>×</span>
+                                </div>
+                              ))}
+
+                              {filteredNiches.map(c => (
+                                <div
+                                  key={c}
+                                  onClick={() => {
+                                    setCategories([...categories, c]);
+                                    setNicheSearchQuery('');
+                                    setShowNicheDropdown(false);
+                                  }}
+                                  style={{ padding: '8px 12px', cursor: 'pointer', fontSize: '13px', color: 'var(--text-2)' }}
+                                  onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-hover)'}
+                                  onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                                >
+                                  {c}
+                                </div>
+                              ))}
+
+                              {filteredNiches.length === 0 && (!nicheSearchQuery.trim() || categories.includes(nicheSearchQuery.trim())) && (
+                                <div style={{ padding: '10px 12px', fontSize: '12px', color: 'var(--text-3)', fontStyle: 'italic' }}>
+                                  Type to search or add any category...
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </div>
                     )}
                   </div>
@@ -1206,22 +1422,174 @@ export default function OperationsPage() {
                   {/* Country Dropdown */}
                   <div style={{ display: 'flex', flexDirection: 'column' }}>
                     <span style={sectionLabelStyle}>Country</span>
-                    <select value={country} onChange={e => setCountry(e.target.value)} style={selectStyle}>
-                      {COUNTRIES.map(c => <option key={c.code} value={c.code}>{c.name}</option>)}
-                    </select>
+                    <div ref={countryRef} style={{ position: 'relative' }}>
+                      <button
+                        type="button"
+                        onClick={() => setShowCountryDropdown(o => !o)}
+                        style={{
+                          width: '100%', height: 38, padding: '0 14px',
+                          background: 'var(--bg-input)', border: '1px solid var(--border-subtle)',
+                          borderRadius: 'var(--r-md)', display: 'flex', alignItems: 'center',
+                          justifyContent: 'space-between', color: 'var(--text-1)', fontSize: '13px',
+                          cursor: 'pointer', transition: 'border-color var(--ease), background var(--ease)'
+                        }}
+                        onMouseEnter={e => e.currentTarget.style.borderColor = 'var(--border-strong)'}
+                        onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--border-subtle)'}
+                      >
+                        <span style={{ fontWeight: 500 }}>{COUNTRIES.find(c => c.code === country)?.name || country}</span>
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ color: 'var(--text-3)', transform: showCountryDropdown ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s', flexShrink: 0 }}>
+                          <path d="M6 9l6 6 6-6"/>
+                        </svg>
+                      </button>
+
+                      {showCountryDropdown && (
+                        <div style={{
+                          position: 'absolute', top: '100%', left: 0, right: 0,
+                          background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+                          borderRadius: 'var(--r-md)', zIndex: 120, maxHeight: 220, overflowY: 'auto',
+                          marginTop: 4, boxShadow: 'var(--shadow-drop)'
+                        }}>
+                          {COUNTRIES.map(c => {
+                            const isSelected = country === c.code;
+                            return (
+                              <div
+                                key={c.code}
+                                onClick={() => {
+                                  setCountry(c.code);
+                                  setRegion('');
+                                  setLocations([]);
+                                  setShowCountryDropdown(false);
+                                }}
+                                style={{
+                                  padding: '9px 14px', cursor: 'pointer', fontSize: '13px',
+                                  color: isSelected ? 'var(--pink)' : 'var(--text-1)',
+                                  fontWeight: isSelected ? 600 : 400,
+                                  background: isSelected ? 'rgba(236,72,153,0.08)' : 'transparent',
+                                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                                  transition: 'background var(--ease)'
+                                }}
+                                onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background = 'var(--bg-hover)'; }}
+                                onMouseLeave={e => { if (!isSelected) e.currentTarget.style.background = 'transparent'; }}
+                              >
+                                <span>{c.name}</span>
+                                {isSelected && <span style={{ color: 'var(--pink)', fontSize: '12px', fontWeight: 700 }}>✓</span>}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
                   </div>
 
                   {/* Region Dropdown */}
                   <div style={{ display: 'flex', flexDirection: 'column' }}>
                     <span style={sectionLabelStyle}>Region / State</span>
-                    <select value={region} onChange={e => setRegion(e.target.value)} style={selectStyle}>
-                      {(REGIONS[country] || []).map(r => <option key={r} value={r}>{r}</option>)}
-                    </select>
+                    <div ref={regionRef} style={{ position: 'relative' }}>
+                      <button
+                        type="button"
+                        onClick={() => { setShowRegionDropdown(o => !o); setRegionSearchQuery(''); }}
+                        style={{
+                          width: '100%', height: 38, padding: '0 14px',
+                          background: 'var(--bg-input)', border: '1px solid var(--border-subtle)',
+                          borderRadius: 'var(--r-md)', display: 'flex', alignItems: 'center',
+                          justifyContent: 'space-between', color: 'var(--text-1)', fontSize: '13px',
+                          cursor: 'pointer', transition: 'border-color var(--ease), background var(--ease)'
+                        }}
+                        onMouseEnter={e => e.currentTarget.style.borderColor = 'var(--border-strong)'}
+                        onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--border-subtle)'}
+                      >
+                        <span style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {region || 'All Regions / States'}
+                        </span>
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ color: 'var(--text-3)', transform: showRegionDropdown ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s', flexShrink: 0 }}>
+                          <path d="M6 9l6 6 6-6"/>
+                        </svg>
+                      </button>
+
+                      {showRegionDropdown && (
+                        <div style={{
+                          position: 'absolute', top: '100%', left: 0, right: 0,
+                          background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+                          borderRadius: 'var(--r-md)', zIndex: 120, maxHeight: 240, overflowY: 'auto',
+                          marginTop: 4, boxShadow: 'var(--shadow-drop)'
+                        }}>
+                          {/* Search input for states/regions if > 5 */}
+                          {(REGIONS[country] || []).length > 5 && (
+                            <div style={{ padding: '8px 10px', borderBottom: '1px solid var(--border-faint)', position: 'sticky', top: 0, background: 'var(--bg-elevated)', zIndex: 2 }}>
+                              <input
+                                type="text"
+                                placeholder="Search state or region..."
+                                value={regionSearchQuery}
+                                onChange={e => setRegionSearchQuery(e.target.value)}
+                                onClick={e => e.stopPropagation()}
+                                style={{
+                                  width: '100%', padding: '6px 10px', background: 'var(--bg-input)',
+                                  border: '1px solid var(--border-subtle)', borderRadius: 'var(--r-sm)',
+                                  color: 'var(--text-1)', fontSize: '12px', outline: 'none'
+                                }}
+                              />
+                            </div>
+                          )}
+
+                          {/* "All Regions / States" Option */}
+                          <div
+                            onClick={() => {
+                              setRegion('');
+                              setLocations([]);
+                              setShowRegionDropdown(false);
+                            }}
+                            style={{
+                              padding: '9px 14px', cursor: 'pointer', fontSize: '13px',
+                              color: !region ? 'var(--pink)' : 'var(--text-1)',
+                              fontWeight: !region ? 600 : 400,
+                              background: !region ? 'rgba(236,72,153,0.08)' : 'transparent',
+                              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                              transition: 'background var(--ease)'
+                            }}
+                            onMouseEnter={e => { if (region) e.currentTarget.style.background = 'var(--bg-hover)'; }}
+                            onMouseLeave={e => { if (region) e.currentTarget.style.background = 'transparent'; }}
+                          >
+                            <span>All Regions / States</span>
+                            {!region && <span style={{ color: 'var(--pink)', fontSize: '12px', fontWeight: 700 }}>✓</span>}
+                          </div>
+
+                          {/* Filtered regions */}
+                          {(REGIONS[country] || [])
+                            .filter(r => r.toLowerCase().includes(regionSearchQuery.toLowerCase()))
+                            .map(r => {
+                              const isSelected = region === r;
+                              return (
+                                <div
+                                  key={r}
+                                  onClick={() => {
+                                    setRegion(r);
+                                    setLocations([]);
+                                    setShowRegionDropdown(false);
+                                  }}
+                                  style={{
+                                    padding: '9px 14px', cursor: 'pointer', fontSize: '13px',
+                                    color: isSelected ? 'var(--pink)' : 'var(--text-1)',
+                                    fontWeight: isSelected ? 600 : 400,
+                                    background: isSelected ? 'rgba(236,72,153,0.08)' : 'transparent',
+                                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                                    transition: 'background var(--ease)'
+                                  }}
+                                  onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background = 'var(--bg-hover)'; }}
+                                  onMouseLeave={e => { if (!isSelected) e.currentTarget.style.background = 'transparent'; }}
+                                >
+                                  <span>{r}</span>
+                                  {isSelected && <span style={{ color: 'var(--pink)', fontSize: '12px', fontWeight: 700 }}>✓</span>}
+                                </div>
+                              );
+                            })}
+                        </div>
+                      )}
+                    </div>
                   </div>
               </div>
 
               {/* Core Selector Controls - ROW 2: Locations / Target Service / Lead Target */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px 20px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '16px 20px' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', position: 'relative' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
                       <span style={sectionLabelStyle}>* Locations</span>
@@ -1241,89 +1609,148 @@ export default function OperationsPage() {
                         style={{ ...inputStyle, width: '100%', borderColor: validationErrors.location ? 'var(--pink)' : 'var(--border-subtle)' }}
                       />
                     ) : (
-                      <div style={{ position: 'relative' }}>
-                        <div style={{ display: 'flex', flexWrap: 'nowrap', overflow: 'hidden', gap: 6, background: 'var(--bg-input)', border: `1px solid ${validationErrors.location ? 'var(--pink)' : 'var(--border-subtle)'}`, borderRadius: 'var(--r-md)', padding: '6px 8px', minHeight: 38, alignItems: 'center' }}>
+                      <div ref={cityRef} style={{ position: 'relative' }}>
+                        <div 
+                          onClick={() => setShowCityDropdown(true)}
+                          style={{ display: 'flex', flexWrap: 'nowrap', overflow: 'hidden', gap: 6, background: 'var(--bg-input)', border: `1px solid ${validationErrors.location ? 'var(--pink)' : 'var(--border-subtle)'}`, borderRadius: 'var(--r-md)', padding: '6px 8px', minHeight: 38, alignItems: 'center', cursor: 'text' }}
+                        >
                           {locations.slice(0, 2).map(loc => (
                             <span key={loc} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: 'rgba(192, 132, 252, 0.2)', backdropFilter: 'blur(4px)', border: '1px solid rgba(192, 132, 252, 0.4)', borderRadius: 4, padding: '2px 6px', fontSize: '12px', color: 'var(--text-1)', whiteSpace: 'nowrap' }}>
                               {loc}
-                              <button onClick={() => setLocations(locations.filter(l => l !== loc))} style={{ background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer', padding: 0, fontSize: '14px', lineHeight: 1 }}>×</button>
+                              <button onClick={(e) => { e.stopPropagation(); setLocations(locations.filter(l => l !== loc)); }} style={{ background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer', padding: 0, fontSize: '14px', lineHeight: 1 }}>×</button>
                             </span>
                           ))}
                           {locations.length > 2 && (
-                            <span onClick={() => setShowCityDropdown(true)} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: 'rgba(192, 132, 252, 0.2)', backdropFilter: 'blur(4px)', border: '1px solid rgba(192, 132, 252, 0.4)', borderRadius: 4, padding: '2px 6px', fontSize: '12px', color: 'var(--text-1)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                            <span onClick={(e) => { e.stopPropagation(); setShowCityDropdown(true); }} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: 'rgba(192, 132, 252, 0.2)', backdropFilter: 'blur(4px)', border: '1px solid rgba(192, 132, 252, 0.4)', borderRadius: 4, padding: '2px 6px', fontSize: '12px', color: 'var(--text-1)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
                               +{locations.length - 2}
                             </span>
                           )}
                           <input 
                             type="text" 
                             value={citySearchQuery}
+                            placeholder={locations.length === 0 ? "Search or add city/location..." : ""}
                             onChange={e => {
                               setCitySearchQuery(e.target.value);
                               setShowCityDropdown(true);
                             }}
                             onFocus={() => setShowCityDropdown(true)}
-                            style={{ background: 'transparent', border: 'none', color: 'var(--text-1)', fontSize: '13px', outline: 'none', flex: 1, minWidth: 60 }}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter' && citySearchQuery.trim()) {
+                                e.preventDefault();
+                                if (!locations.includes(citySearchQuery.trim())) {
+                                  setLocations([...locations, citySearchQuery.trim()]);
+                                }
+                                setCitySearchQuery('');
+                                setShowCityDropdown(false);
+                              }
+                            }}
+                            style={{ background: 'transparent', border: 'none', color: 'var(--text-1)', fontSize: '13px', outline: 'none', flex: 1, minWidth: 80 }}
                           />
                         </div>
                         
-                        {showCityDropdown && (
-                          <div style={{
-                            position: 'absolute', top: '100%', left: 0, right: 0,
-                            background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
-                            borderRadius: 'var(--r-md)', zIndex: 100, maxHeight: 180, overflowY: 'auto',
-                            marginTop: 4, boxShadow: 'var(--shadow-drop)'
-                          }}
-                          onMouseLeave={() => setShowCityDropdown(false)}
-                          >
-                            {locations.map(loc => (
-                              <div
-                                key={`sel-${loc}`}
-                                onClick={() => setLocations(locations.filter(l => l !== loc))}
-                                style={{ padding: '8px 12px', cursor: 'pointer', fontSize: '13px', color: 'var(--text-1)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(192, 132, 252, 0.05)' }}
-                                onMouseEnter={e => e.currentTarget.style.background = 'rgba(192, 132, 252, 0.1)'}
-                                onMouseLeave={e => e.currentTarget.style.background = 'rgba(192, 132, 252, 0.05)'}
-                              >
-                                {loc}
-                                <span style={{ color: 'var(--text-3)', fontSize: '14px' }}>×</span>
-                              </div>
-                            ))}
-                            {(REGION_CITIES[region] || []).filter(c => c.toLowerCase().includes(citySearchQuery.toLowerCase()) && !locations.includes(c)).map(c => (
-                              <div
-                                key={c}
-                                onClick={() => {
-                                  setLocations([...locations, c]);
-                                  setCitySearchQuery('');
-                                  setShowCityDropdown(false);
-                                }}
-                                style={{ padding: '8px 12px', cursor: 'pointer', fontSize: '13px', color: 'var(--text-2)' }}
-                                onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-hover)'}
-                                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
-                              >
-                                {c}
-                              </div>
-                            ))}
-                          </div>
-                        )}
+                        {showCityDropdown && (() => {
+                          // Filter strictly by selected region (state), or by country if region is empty
+                          const availableCities = Array.from(new Set(
+                            region && REGION_CITIES[region]
+                              ? REGION_CITIES[region]
+                              : (COUNTRY_CITIES[country] || COUNTRY_CITIES['US'])
+                          ));
+                          const filteredCities = availableCities.filter(
+                            c => c.toLowerCase().includes(citySearchQuery.toLowerCase()) && !locations.includes(c)
+                          );
+
+                          return (
+                            <div style={{
+                              position: 'absolute', top: '100%', left: 0, right: 0,
+                              background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+                              borderRadius: 'var(--r-md)', zIndex: 100, maxHeight: 220, overflowY: 'auto',
+                              marginTop: 4, boxShadow: 'var(--shadow-drop)'
+                            }}>
+                              {citySearchQuery.trim() && !locations.includes(citySearchQuery.trim()) && !filteredCities.some(c => c.toLowerCase() === citySearchQuery.trim().toLowerCase()) && (
+                                <div
+                                  onClick={() => {
+                                    setLocations([...locations, citySearchQuery.trim()]);
+                                    setCitySearchQuery('');
+                                    setShowCityDropdown(false);
+                                  }}
+                                  style={{ padding: '8px 12px', cursor: 'pointer', fontSize: '13px', color: 'var(--pink)', fontWeight: 600, borderBottom: '1px solid var(--border-faint)', background: 'rgba(236,72,153,0.06)' }}
+                                  onMouseEnter={e => e.currentTarget.style.background = 'rgba(236,72,153,0.12)'}
+                                  onMouseLeave={e => e.currentTarget.style.background = 'rgba(236,72,153,0.06)'}
+                                >
+                                  + Add &ldquo;{citySearchQuery.trim()}&rdquo;
+                                </div>
+                              )}
+
+                              {locations.map(loc => (
+                                <div
+                                  key={`sel-${loc}`}
+                                  onClick={() => setLocations(locations.filter(l => l !== loc))}
+                                  style={{ padding: '8px 12px', cursor: 'pointer', fontSize: '13px', color: 'var(--text-1)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(192, 132, 252, 0.05)' }}
+                                  onMouseEnter={e => e.currentTarget.style.background = 'rgba(192, 132, 252, 0.1)'}
+                                  onMouseLeave={e => e.currentTarget.style.background = 'rgba(192, 132, 252, 0.05)'}
+                                >
+                                  {loc}
+                                  <span style={{ color: 'var(--text-3)', fontSize: '14px' }}>×</span>
+                                </div>
+                              ))}
+
+                              {filteredCities.map(c => (
+                                <div
+                                  key={c}
+                                  onClick={() => {
+                                    setLocations([...locations, c]);
+                                    setCitySearchQuery('');
+                                    setShowCityDropdown(false);
+                                  }}
+                                  style={{ padding: '8px 12px', cursor: 'pointer', fontSize: '13px', color: 'var(--text-2)' }}
+                                  onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-hover)'}
+                                  onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                                >
+                                  {c}
+                                </div>
+                              ))}
+
+                              {filteredCities.length === 0 && (!citySearchQuery.trim() || locations.includes(citySearchQuery.trim())) && (
+                                <div style={{ padding: '10px 12px', fontSize: '12px', color: 'var(--text-3)', fontStyle: 'italic' }}>
+                                  {region ? `No more suggestions for ${region}. Type to add custom city...` : 'Type to search or add any location...'}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </div>
                     )}
                     
                     {!customLocation && (
                       <div style={{ fontSize: '11px', color: 'var(--text-3)', marginTop: 4 }}>
-                        Try: {({ US: ['New York City', 'Los Angeles', 'Chicago'], UK: ['London', 'Manchester', 'Birmingham'], CA: ['Toronto', 'Vancouver', 'Montreal'], AU: ['Sydney', 'Melbourne', 'Brisbane'], IN: ['Mumbai', 'Delhi', 'Bangalore'] }[country] || ['London', 'Manchester', 'Birmingham']).map((cVal, idx, arr) => (
-                          <span key={cVal}>
-                            <button 
-                              onClick={() => {
-                                if (!locations.includes(cVal)) {
-                                  setLocations([...locations, cVal]);
-                                }
-                              }} 
-                              style={{ background: 'none', border: 'none', color: 'var(--text-3)', textDecoration: 'underline', cursor: 'pointer', padding: 0 }}
-                            >
-                              {cVal}
-                            </button>
-                            {idx < arr.length - 1 && ' · '}
-                          </span>
-                        ))}
+                        Try:{' '}
+                        {(() => {
+                          const suggestions = region && REGION_CITIES[region]
+                            ? REGION_CITIES[region].slice(0, 4)
+                            : ({
+                                US: ['New York City', 'Los Angeles', 'Chicago', 'Houston'],
+                                UK: ['London', 'Manchester', 'Birmingham', 'Leeds'],
+                                CA: ['Toronto', 'Vancouver', 'Montreal', 'Calgary'],
+                                AU: ['Sydney', 'Melbourne', 'Brisbane', 'Perth'],
+                                IN: ['Mumbai', 'Delhi', 'Bangalore', 'Hyderabad']
+                              }[country] || ['New York City', 'Los Angeles', 'Chicago']);
+
+                          return suggestions.map((cVal, idx, arr) => (
+                            <span key={cVal}>
+                              <button 
+                                onClick={() => {
+                                  if (!locations.includes(cVal)) {
+                                    setLocations([...locations, cVal]);
+                                  }
+                                }} 
+                                style={{ background: 'none', border: 'none', color: 'var(--text-3)', textDecoration: 'underline', cursor: 'pointer', padding: 0 }}
+                              >
+                                {cVal}
+                              </button>
+                              {idx < arr.length - 1 && ' · '}
+                            </span>
+                          ));
+                        })()}
                       </div>
                     )}
                   </div>
@@ -1331,9 +1758,61 @@ export default function OperationsPage() {
                   {/* Service Dropdown */}
                   <div style={{ display: 'flex', flexDirection: 'column' }}>
                     <span style={sectionLabelStyle}>Target Service</span>
-                    <select value={service} onChange={e => setService(e.target.value)} style={selectStyle}>
-                      {SERVICES.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
-                    </select>
+                    <div ref={serviceRef} style={{ position: 'relative' }}>
+                      <button
+                        type="button"
+                        onClick={() => setShowServiceDropdown(o => !o)}
+                        style={{
+                          width: '100%', height: 38, padding: '0 14px',
+                          background: 'var(--bg-input)', border: '1px solid var(--border-subtle)',
+                          borderRadius: 'var(--r-md)', display: 'flex', alignItems: 'center',
+                          justifyContent: 'space-between', color: 'var(--text-1)', fontSize: '13px',
+                          cursor: 'pointer', transition: 'border-color var(--ease), background var(--ease)'
+                        }}
+                        onMouseEnter={e => e.currentTarget.style.borderColor = 'var(--border-strong)'}
+                        onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--border-subtle)'}
+                      >
+                        <span style={{ fontWeight: 500 }}>{SERVICES.find(s => s.key === service)?.label || service}</span>
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ color: 'var(--text-3)', transform: showServiceDropdown ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s', flexShrink: 0 }}>
+                          <path d="M6 9l6 6 6-6"/>
+                        </svg>
+                      </button>
+
+                      {showServiceDropdown && (
+                        <div style={{
+                          position: 'absolute', top: '100%', left: 0, right: 0,
+                          background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+                          borderRadius: 'var(--r-md)', zIndex: 120, maxHeight: 220, overflowY: 'auto',
+                          marginTop: 4, boxShadow: 'var(--shadow-drop)'
+                        }}>
+                          {SERVICES.map(s => {
+                            const isSelected = service === s.key;
+                            return (
+                              <div
+                                key={s.key}
+                                onClick={() => {
+                                  setService(s.key);
+                                  setShowServiceDropdown(false);
+                                }}
+                                style={{
+                                  padding: '9px 14px', cursor: 'pointer', fontSize: '13px',
+                                  color: isSelected ? 'var(--pink)' : 'var(--text-1)',
+                                  fontWeight: isSelected ? 600 : 400,
+                                  background: isSelected ? 'rgba(236,72,153,0.08)' : 'transparent',
+                                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                                  transition: 'background var(--ease)'
+                                }}
+                                onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background = 'var(--bg-hover)'; }}
+                                onMouseLeave={e => { if (!isSelected) e.currentTarget.style.background = 'transparent'; }}
+                              >
+                                <span>{s.label}</span>
+                                {isSelected && <span style={{ color: 'var(--pink)', fontSize: '12px', fontWeight: 700 }}>✓</span>}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
                   </div>
 
                   {/* Lead Count */}
@@ -1400,7 +1879,7 @@ export default function OperationsPage() {
                 </button>
 
                 {showAdvanced && (
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 20, marginTop: 14, padding: '16px', background: 'var(--bg-nav)', borderRadius: 'var(--r-md)', border: '1px solid var(--border-faint)' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 20, marginTop: 14, padding: '16px', background: 'var(--bg-nav)', borderRadius: 'var(--r-md)', border: '1px solid var(--border-faint)' }}>
                     
                     {/* Tuning parameters */}
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -1614,214 +2093,209 @@ export default function OperationsPage() {
             </div>
           ) : (
             /* ==========================================
-               2. ACTIVE SCRAPING PROGRESS VIEW
+               2. ACTIVE SCRAPING PROGRESS VIEW (COMPACT TOP STRIP)
                ========================================== */
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-              
-              {/* Header */}
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-1)', display: 'flex', alignItems: 'center', gap: 8 }}>
-                    {scrapeStatus === 'running' && <span style={{color: 'var(--pink)'}}>●</span>}
-                    {scrapeStatus === 'stopped_saved' && <span style={{color: 'var(--text-3)'}}>Ⅱ</span>}
-                    {scrapeStatus === 'cancelled' && <span style={{color: 'var(--text-3)'}}>■</span>}
-                    {scrapeStatus === 'cancelling' && <span style={{color: 'var(--text-3)'}}>■</span>}
-                    {(scrapeStatus === 'completed' || scrapeStatus === 'partial') && <span style={{color: 'var(--pink)'}}>✓</span>}
-                    {scrapeStatus === 'failed' && <span style={{color: 'var(--pink)'}}>!</span>}
-                    
-                    {scrapeStatus === 'running' && `Scraping "${plainQuery ? plainQueryValue : categories.join(', ') || niche}" leads...`}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+                
+                {/* Left: Status Dot, Title, Stage pill & ETA */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', minWidth: 0, flex: 1 }}>
+                  {/* Status indicator dot */}
+                  <div style={{
+                    width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
+                    background: scrapeStatus === 'running' ? 'var(--pink)' :
+                               (scrapeStatus === 'completed' || scrapeStatus === 'partial') ? 'var(--green)' :
+                               scrapeStatus === 'failed' ? 'var(--red)' : 'var(--amber)',
+                    boxShadow: scrapeStatus === 'running' ? '0 0 10px var(--pink)' : 'none',
+                    animation: scrapeStatus === 'running' ? 'pulse 1.5s infinite' : 'none'
+                  }} />
+
+                  {/* Title */}
+                  <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-1)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {scrapeStatus === 'running' && `Scraping "${plainQuery ? plainQueryValue : (categories[0] || niche)}"`}
                     {scrapeStatus === 'stopped_saved' && 'Scrape Paused'}
-                    {scrapeStatus === 'cancelling' && 'Safely halting operations...'}
+                    {scrapeStatus === 'cancelling' && 'Halting...'}
                     {scrapeStatus === 'cancelled' && 'Scrape Stopped'}
-                    {scrapeStatus === 'completed' && 'Scrape Complete'}
-                    {scrapeStatus === 'partial' && 'Partial Scrape Complete'}
-                    {scrapeStatus === 'failed' && 'Scraper Connection Failed'}
+                    {scrapeStatus === 'completed' && (scrapedCount === 0 ? 'Complete (0 Found)' : 'Scrape Complete')}
+                    {scrapeStatus === 'partial' && 'Partial Complete'}
+                    {scrapeStatus === 'failed' && (scrapeError ? `Failed: ${scrapeError}` : 'Scrape Failed')}
                   </span>
+
+                  {/* Stage micro-status */}
+                  {scrapeStatus === 'running' && (
+                    <span className="pill" style={{ background: 'var(--bg-input)', border: '1px solid var(--border-subtle)', color: 'var(--text-2)', fontSize: '11px', fontWeight: 500, fontFamily: 'monospace' }}>
+                      {microStatus}
+                    </span>
+                  )}
+
+                  {/* ETA */}
+                  {scrapeStatus === 'running' && (
+                    <span style={{ fontSize: '11px', color: 'var(--text-3)', background: 'rgba(0,0,0,0.03)', padding: '2px 8px', borderRadius: 'var(--r-sm)' }}>
+                      ⏱ {remainingTime > 0 ? (remainingTime > 60 ? `~${Math.floor(remainingTime / 60)}m ${remainingTime % 60}s` : `~${remainingTime}s left`) : 'Estimating...'}
+                    </span>
+                  )}
                 </div>
+
+                {/* Right: Progress stats & compact actions */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
+                  {/* Progress count */}
+                  <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-1)' }}>
+                    {scrapedCount} <span style={{ color: 'var(--text-3)', fontWeight: 400 }}>/ {allAvailable ? '∞' : (count === 'custom' ? customCount : count)} leads</span>
+                    {!allAvailable && <span style={{ color: 'var(--pink)', fontSize: '11px', marginLeft: 4 }}>({Math.floor(progress)}%)</span>}
+                  </div>
+
+                  {/* Stats chips */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'var(--bg-input)', padding: '2px 8px', borderRadius: 'var(--r-sm)', fontSize: '11px' }}>
+                    <span style={{ color: 'var(--text-3)' }}>Fetched: <strong style={{ color: 'var(--text-1)' }}>{scrapeStats.discovered || 0}</strong></span>
+                    <span style={{ color: 'var(--border-subtle)' }}>|</span>
+                    <span style={{ color: 'var(--green)' }}>Saved: <strong>{scrapeStats.saved || 0}</strong></span>
+                    {scrapeStats.failed > 0 && (
+                      <>
+                        <span style={{ color: 'var(--border-subtle)' }}>|</span>
+                        <span style={{ color: 'var(--red)' }}>Failed: <strong>{scrapeStats.failed}</strong></span>
+                      </>
+                    )}
+                  </div>
+
+                  {/* Action buttons */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    {scrapeStatus === 'running' && (
+                      <>
+                        <button 
+                          onClick={handleStopScrape} 
+                          className="btn btn-ghost btn-sm" 
+                          style={{ height: 28, padding: '0 10px', fontSize: '11px' }}
+                        >
+                          ⏸ Pause
+                        </button>
+                        <button 
+                          onClick={handleCancelScrape} 
+                          title="Stop Scrape"
+                          className="btn btn-ghost btn-sm" 
+                          style={{ height: 28, padding: '0 10px', fontSize: '11px' }}
+                        >
+                          ■ Stop
+                        </button>
+                        <button 
+                          onClick={handleCancelScrape} 
+                          title="Cancel Scrape"
+                          className="btn btn-ghost btn-sm" 
+                          style={{ height: 28, width: 28, padding: 0, justifyContent: 'center', fontSize: '13px' }}
+                        >
+                          ✕
+                        </button>
+                      </>
+                    )}
+
+                    {(scrapeStatus === 'stopped_saved' || scrapeStatus === 'cancelled') && (
+                      <>
+                        <button 
+                          onClick={handleResumeScrape} 
+                          className="btn btn-pink btn-sm" 
+                          style={{ height: 28, padding: '0 12px', fontSize: '11px', fontWeight: 600 }}
+                        >
+                          ▶ Resume
+                        </button>
+                        <button 
+                          onClick={() => {
+                            setSaveSuccess(true);
+                            setTimeout(() => setSaveSuccess(false), 2000);
+                          }} 
+                          className="btn btn-ghost btn-sm" 
+                          style={{ height: 28, padding: '0 10px', fontSize: '11px' }}
+                        >
+                          {saveSuccess ? 'Saved ✓' : 'Save'}
+                        </button>
+                        <button 
+                          onClick={handleBackToControls} 
+                          className="btn btn-ghost btn-sm" 
+                          style={{ height: 28, padding: '0 10px', fontSize: '11px' }}
+                        >
+                          Back
+                        </button>
+                      </>
+                    )}
+
+                    {(scrapeStatus === 'completed' || scrapeStatus === 'partial') && (
+                      <>
+                        <button 
+                          onClick={handleViewLeads} 
+                          className="btn btn-ghost btn-sm" 
+                          style={{ height: 28, padding: '0 10px', fontSize: '11px' }}
+                        >
+                          View Raw Leads
+                        </button>
+                        <button 
+                          onClick={handleBackToControls} 
+                          className="btn btn-pink btn-sm" 
+                          style={{ height: 28, padding: '0 12px', fontSize: '11px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 5 }}
+                        >
+                          Back to Controls
+                        </button>
+                      </>
+                    )}
+
+                    {scrapeStatus === 'failed' && (
+                      <>
+                        <button 
+                          onClick={() => { 
+                            setRunning(false); 
+                            setProgress(0); 
+                            setScrapedCount(0); 
+                            setScrapeStatus('idle'); 
+                            setScrapeError(null); 
+                            handleStartScrape(); 
+                          }} 
+                          className="btn btn-ghost btn-sm" 
+                          style={{ height: 28, padding: '0 10px', fontSize: '11px' }}
+                        >
+                          Retry Scrape
+                        </button>
+                        <button 
+                          onClick={handleBackToControls} 
+                          className="btn btn-pink btn-sm" 
+                          style={{ height: 28, padding: '0 12px', fontSize: '11px', fontWeight: 600 }}
+                        >
+                          Back to Controls
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+
               </div>
 
-              {/* ETA */}
-              <div style={{ fontSize: '13px', color: 'var(--text-3)' }}>
-                Target: <strong style={{ color: 'var(--text-1)' }}>{allAvailable ? 'All Available' : count} leads</strong>
-                {scrapeStatus === 'running' && (remainingTime > 0 ? ` · ~${remainingTime > 60 ? `${Math.floor(remainingTime / 60)}m ${remainingTime % 60}s` : `${remainingTime}s`} remaining` : ' · Estimating...')}
-              </div>
-              
-              {/* Progress text */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '12px', color: 'var(--text-2)', marginTop: 8 }}>
-                <span>Progress:</span>
-                <span>{scrapedCount} / {allAvailable ? 'All Available' : count} raw leads {allAvailable ? '' : `(${Math.floor(progress)}% complete)`}</span>
-              </div>
-
-              {/* Progress bar */}
-              <div style={{ height: 6, borderRadius: 3, background: 'var(--bg-input)', overflow: 'hidden' }}>
+              {/* Progress Bar (Slim 4px track at bottom of card) */}
+              <div style={{ height: 4, borderRadius: 2, background: 'var(--bg-input)', overflow: 'hidden', width: '100%', marginTop: 2 }}>
                 <div style={{ 
-                  width: `${scrapeStatus === 'failed' ? 100 : progress}%`, 
+                  width: `${Math.min(100, Math.max(0, progress))}%`, 
                   height: '100%', 
-                  background: 'var(--pink)', 
+                  background: 'linear-gradient(90deg, var(--pink), #f472b6)', 
                   transition: 'width 0.3s cubic-bezier(0.4, 0, 0.2, 1)' 
                 }} />
               </div>
 
-              {/* Status Box */}
-              {scrapeStatus === 'running' && (
-                <div style={{ padding: '10px 14px', background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--r-md)', fontSize: '12px', color: 'var(--text-2)', display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'monospace' }}>
-                  <span style={{color: 'var(--text-3)'}}>●</span> {microStatus}
-                </div>
-              )}
-              {scrapeStatus === 'stopped_saved' && (
-                <div style={{ padding: '10px 14px', background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--r-md)', fontSize: '12px', color: 'var(--text-2)', display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'monospace' }}>
-                  {scrapedCount} leads saved so far
-                </div>
-              )}
-              {scrapeStatus === 'cancelled' && (
-                <div style={{ padding: '10px 14px', background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--r-md)', fontSize: '12px', color: 'var(--text-2)', display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'monospace' }}>
-                  {scrapedCount} raw leads saved
-                </div>
-              )}
-
-              {/* Real statistics indicators */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginTop: 16 }}>
-                <div style={{ textAlign: 'center' }}>
-                  <div style={{ fontSize: '11px', color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 4 }}>Fetched</div>
-                  <div style={{ fontSize: '20px', fontWeight: 600, color: 'var(--text-1)' }}>{scrapeStats.discovered || 0}</div>
-                </div>
-                <div style={{ textAlign: 'center' }}>
-                  <div style={{ fontSize: '11px', color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 4 }}>Saved</div>
-                  <div style={{ fontSize: '20px', fontWeight: 600, color: 'var(--text-1)' }}>{scrapeStats.saved || 0}</div>
-                </div>
-                <div style={{ textAlign: 'center' }}>
-                  <div style={{ fontSize: '11px', color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 4 }}>Failed</div>
-                  <div style={{ fontSize: '20px', fontWeight: 600, color: 'var(--text-1)' }}>{scrapeStats.failed || 0}</div>
-                </div>
-              </div>
-
-              {/* Error messages */}
+              {/* Error messages if failed */}
               {scrapeStatus === 'failed' && scrapeError && (
-                <div style={{ fontSize: '12px', color: 'var(--pink)', marginTop: 4, background: 'rgba(236,72,153,0.05)', padding: '8px 12px', borderRadius: 'var(--r-md)', border: '1px solid var(--pink)' }}>
-                  Error: {scrapeError}
+                <div style={{ fontSize: '11px', color: 'var(--red)', marginTop: 2, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span>⚠️</span> Error: {scrapeError}
                 </div>
               )}
-
-              {/* Controls buttons row */}
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginTop: 16, padding: '12px 16px', background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--r-md)' }}>
-                
-                {/* Left side actions */}
-                <div style={{ display: 'flex', gap: 8 }}>
-                  {scrapeStatus === 'running' && (
-                    <>
-                      <button 
-                        onClick={handleStopScrape} 
-                        className="btn btn-outline btn-sm" 
-                        style={{ padding: '6px 14px', fontSize: '12px', color: 'var(--text-1)', borderColor: 'var(--border-subtle)' }}
-                      >
-                        ⏸ Pause
-                      </button>
-                      <button 
-                        onClick={handleCancelScrape}
-                        className="btn btn-outline btn-sm" 
-                        style={{ padding: '6px 14px', fontSize: '12px', color: 'var(--text-1)', borderColor: 'var(--border-subtle)' }}
-                      >
-                        ■ Stop
-                      </button>
-                      <button 
-                        disabled
-                        className="btn btn-outline btn-sm" 
-                        style={{ padding: '6px 14px', fontSize: '12px', color: 'var(--text-1)', borderColor: 'var(--border-subtle)', opacity: 0.5, cursor: 'not-allowed' }}
-                      >
-                        Save
-                      </button>
-                    </>
-                  )}
-
-                  {(scrapeStatus === 'stopped_saved' || scrapeStatus === 'cancelled') && (
-                    <>
-                      <button 
-                        onClick={handleResumeScrape} 
-                        className="btn btn-outline btn-sm" 
-                        style={{ padding: '6px 14px', fontSize: '12px', color: 'var(--text-1)', borderColor: 'var(--border-subtle)' }}
-                      >
-                        ▶ Resume
-                      </button>
-                      <button 
-                        onClick={() => {
-                          setSaveSuccess(true);
-                          setTimeout(() => setSaveSuccess(false), 2000);
-                        }} 
-                        className="btn btn-outline btn-sm" 
-                        style={{ padding: '6px 14px', fontSize: '12px', color: 'var(--text-1)', borderColor: 'var(--border-subtle)' }}
-                      >
-                        {saveSuccess ? 'Saved successfully' : 'Save'}
-                      </button>
-                    </>
-                  )}
-
-                  {(scrapeStatus === 'completed' || scrapeStatus === 'partial') && (
-                    <button onClick={handleViewLeads} className="btn btn-outline btn-sm" style={{ padding: '6px 14px', fontSize: '12px', color: 'var(--text-1)', borderColor: 'var(--border-subtle)' }}>
-                      View Raw Leads
-                    </button>
-                  )}
-
-                  {scrapeStatus === 'failed' && (
-                    <button 
-                      onClick={() => { 
-                        setRunning(false); 
-                        setProgress(0); 
-                        setScrapedCount(0); 
-                        setScrapeStatus('idle'); 
-                        setScrapeError(null); 
-                        handleStartScrape(); 
-                      }} 
-                      className="btn btn-outline btn-sm" 
-                      style={{ padding: '6px 14px', fontSize: '12px', color: 'var(--text-1)', borderColor: 'var(--border-subtle)' }}
-                    >
-                      Retry Scrape
-                    </button>
-                  )}
-                </div>
-
-                {/* Right side actions */}
-                <div style={{ display: 'flex', gap: 8 }}>
-                  {(scrapeStatus === 'running' || scrapeStatus === 'stopped_saved' || scrapeStatus === 'cancelled') && (
-                    <button 
-                      onClick={handleCancelScrape} 
-                      className="btn btn-ghost btn-sm" 
-                      style={{ padding: '6px 14px', fontSize: '12px', color: 'var(--text-2)' }}
-                      onMouseEnter={e => e.currentTarget.style.color = 'var(--pink)'}
-                      onMouseLeave={e => e.currentTarget.style.color = 'var(--text-2)'}
-                    >
-                      ✕ Cancel
-                    </button>
-                  )}
-
-                  {['completed', 'partial', 'failed'].includes(scrapeStatus) && (
-                    <button 
-                      onClick={() => { 
-                        setRunning(false); 
-                        setProgress(0); 
-                        setScrapedCount(0); 
-                        setScrapeStatus('idle'); 
-                        setScrapeError(null); 
-                      }} 
-                      className="btn btn-ghost btn-sm" 
-                      style={{ padding: '6px 14px', fontSize: '12px', color: 'var(--text-1)' }}
-                    >
-                      Run Another Scrape
-                    </button>
-                  )}
-                </div>
-
-              </div>
-
             </div>
           )}
 
-        </div>
       </div>
 
+
       {/* ── Raw Lead Sheets section ── */}
-      <div ref={tableRef} style={{ background:'var(--bg-surface)',border:'1px solid var(--border-faint)',borderRadius:'var(--r-2xl)',overflow:'hidden',marginBottom:14 }}>
-        <div style={{ display:'flex',alignItems:'center',justifyContent:'space-between',padding:'16px 24px',borderBottom:'1px solid var(--border-faint)' }}>
-          <span style={{ fontSize:'14px',fontWeight:700,color:'var(--text-1)' }}>Raw Lead Sheets</span>
+      <div ref={tableRef} style={{ background:'var(--bg-surface)',border:'1px solid var(--border-faint)',borderRadius:'var(--r-2xl)',overflow:'hidden',marginBottom:14,display:'flex',flexDirection:'column',boxShadow:'0 2px 10px rgba(0,0,0,0.02)' }}>
+        <div style={{ display:'flex',alignItems:'center',justifyContent:'space-between',padding:'14px 22px',borderBottom:'1px solid var(--border-faint)',flexShrink:0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize:'14px',fontWeight:700,color:'var(--text-1)' }}>Raw Lead Sheets</span>
+            <span className="pill" style={{ background: 'var(--bg-input)', color: 'var(--text-3)', fontSize: '10px' }}>
+              {rawSheets.length} {rawSheets.length === 1 ? 'Sheet' : 'Sheets'}
+            </span>
+          </div>
           
           {segregating ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -1837,26 +2311,26 @@ export default function OperationsPage() {
               onClick={handleSegregate} 
               disabled={!selectedRawId} 
               className="btn btn-pink" 
-              style={{ height:34, padding:'0 16px', opacity:!selectedRawId ? 0.5 : 1 }}
+              style={{ height:32, padding:'0 16px', fontSize: '12px', opacity:!selectedRawId ? 0.5 : 1 }}
             >
               Segregate
             </button>
           )}
         </div>
 
-        <div style={{ overflowX:'auto' }}>
-          <table>
-            <thead>
+        <div style={{ overflowX:'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 210px)' }}>
+          <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+            <thead style={{ position: 'sticky', top: 0, zIndex: 10, background: 'var(--bg-surface)' }}>
               <tr style={{ borderBottom:'1px solid var(--border-faint)' }}>
-                {['Lead ID', 'Lead Name', 'Country & Region', 'Niche', 'Service', 'Total Leads', 'Date'].map(c => (
-                  <th key={c} style={{ padding:'10px 18px',fontSize:'10px',fontWeight:600,color:'var(--text-3)',textTransform:'uppercase',letterSpacing:'.07em',textAlign:'left',whiteSpace:'nowrap' }}>{c}</th>
+                {['Lead ID', 'Lead Name', 'Country & Region', 'Niche', 'Service', 'Total Leads', 'Date', ''].map((c, i) => (
+                  <th key={i} style={{ padding:'10px 18px',fontSize:'10px',fontWeight:600,color:'var(--text-3)',textTransform:'uppercase',letterSpacing:'.07em',textAlign: i === 7 ? 'right' : 'left',whiteSpace:'nowrap',background:'var(--bg-surface)' }}>{c}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {rawSheets.length === 0 ? (
                 <tr>
-                  <td colSpan={7} style={{ padding:'56px',textAlign:'center',color:'var(--text-3)',fontSize:'14px' }}>
+                  <td colSpan={8} style={{ padding:'56px',textAlign:'center',color:'var(--text-3)',fontSize:'14px' }}>
                     No raw lead sheets available. Run a scrape above to create one.
                   </td>
                 </tr>
@@ -1930,6 +2404,15 @@ export default function OperationsPage() {
                     <td style={{ padding:'14px 18px',verticalAlign:'middle',color:'var(--text-3)',fontSize:'11px',whiteSpace:'nowrap' }}>
                       {formatDate(sheet.createdAt)}
                     </td>
+                    {/* 3-Dots Options Menu */}
+                    <td style={{ padding:'14px 18px',verticalAlign:'middle',textAlign:'right' }} onClick={e => e.stopPropagation()}>
+                      <ThreeDotMenu items={[
+                        { label: 'Preview Leads', icon: I.preview, onClick: () => setOpenRawSheet(sheet) },
+                        { label: 'Rename Sheet', icon: I.edit, onClick: () => handleOpenRenameModal(sheet) },
+                        { label: 'Export to CSV', icon: I.download, onClick: () => handleExportSheet(sheet) },
+                        { label: 'Delete Sheet', icon: I.trash, danger: true, onClick: () => handleDeleteSheet(sheet) },
+                      ]} />
+                    </td>
                   </tr>
                 );
               })}
@@ -1979,9 +2462,30 @@ export default function OperationsPage() {
       {openRawSheet && (
         <>
           <div onClick={() => setOpenRawSheet(null)} style={{ position:'fixed',inset:0,background:'rgba(0,0,0,.75)',backdropFilter:'blur(4px)',zIndex:100 }} />
-          <div style={{ position:'fixed',top:'50%',left:'50%',transform:'translate(-50%,-50%)',width:'min(94vw,900px)',maxHeight:'80vh',background:'var(--bg-elevated)',border:'1px solid var(--border-subtle)',borderRadius:'var(--r-2xl)',zIndex:101,display:'flex',flexDirection:'column',overflow:'hidden',boxShadow:'0 40px 100px rgba(0,0,0,.65)' }}>
+          <div style={{
+            position:'fixed',
+            top: isRawFullScreen ? 0 : '50%',
+            left: isRawFullScreen ? 0 : '50%',
+            transform: isRawFullScreen ? 'none' : 'translate(-50%,-50%)',
+            width: isRawFullScreen ? '100vw' : 'min(94vw,1000px)',
+            height: isRawFullScreen ? '100vh' : 'auto',
+            maxHeight: isRawFullScreen ? '100vh' : '82vh',
+            background:'var(--bg-elevated)',
+            border: isRawFullScreen ? 'none' : '1px solid var(--border-subtle)',
+            borderRadius: isRawFullScreen ? 0 : 'var(--r-2xl)',
+            zIndex:101,
+            display:'flex',
+            flexDirection:'column',
+            overflow:'hidden',
+            boxShadow: isRawFullScreen ? 'none' : '0 40px 100px rgba(0,0,0,.65)',
+            transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)'
+          }}>
             {/* Header */}
-            <div style={{ padding:'20px 24px',borderBottom:'1px solid var(--border-faint)',display:'flex',alignItems:'center',justifyContent:'space-between',flexShrink:0 }}>
+            <div
+              onDoubleClick={() => setIsRawFullScreen(f => !f)}
+              title="Double click to toggle fullscreen"
+              style={{ padding:'20px 24px',borderBottom:'1px solid var(--border-faint)',display:'flex',alignItems:'center',justifyContent:'space-between',flexShrink:0,cursor:'pointer' }}
+            >
               <div>
                 <div style={{ display:'flex',alignItems:'center',gap:10,marginBottom:4 }}>
                   <span style={{ fontSize:'15px',fontWeight:700,color:'var(--text-1)' }}>{openRawSheet.name}</span>
@@ -1990,9 +2494,29 @@ export default function OperationsPage() {
                 </div>
                 <div style={{ fontSize:'12px',color:'var(--text-3)' }}>Service: {SERVICE_LABELS[openRawSheet.service as ServiceType]}</div>
               </div>
-              <button onClick={() => setOpenRawSheet(null)} className="btn btn-ghost btn-sm" style={{ padding: 6 }}>
-                ✕
-              </button>
+              <div style={{ display:'flex',alignItems:'center',gap:8 }} onClick={e => e.stopPropagation()}>
+                {/* Fullscreen Toggle Button */}
+                <button
+                  onClick={() => setIsRawFullScreen(f => !f)}
+                  title={isRawFullScreen ? "Exit Fullscreen" : "Fullscreen"}
+                  style={{ width:30,height:30,display:'flex',alignItems:'center',justifyContent:'center',borderRadius:'var(--r-md)',color:'var(--text-3)',cursor:'pointer' }}
+                  onMouseEnter={e=>(e.currentTarget.style.background='var(--bg-hover)')}
+                  onMouseLeave={e=>(e.currentTarget.style.background='transparent')}
+                >
+                  {isRawFullScreen ? (
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/>
+                    </svg>
+                  ) : (
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>
+                    </svg>
+                  )}
+                </button>
+                <button onClick={() => setOpenRawSheet(null)} className="btn btn-ghost btn-sm" style={{ padding: 6, cursor:'pointer' }}>
+                  ✕
+                </button>
+              </div>
             </div>
             {/* Body */}
             <div style={{ flex:1,overflowY:'auto',padding:'24px' }}>
@@ -2012,8 +2536,8 @@ export default function OperationsPage() {
                     </thead>
                     <tbody>
                       {previewLeads.map((l, idx) => (
-                        <tr key={l.leadId} style={{ borderBottom:'1px solid var(--border-faint)' }}>
-                          <td style={{ padding:'10px 12px',fontSize:'11px',fontFamily:'monospace',color:'var(--text-3)' }}>{`RAW-${idx + 1}`}</td>
+                        <tr key={l.leadId || idx} style={{ borderBottom:'1px solid var(--border-faint)' }}>
+                          <td style={{ padding:'10px 12px',fontSize:'11px',fontFamily:'monospace',color:'var(--text-3)' }}>{l.leadId || `${openRawSheet.sheetId}-${String(idx + 1).padStart(2, '0')}`}</td>
                           <td style={{ padding:'10px 12px',fontWeight:600,color:'var(--text-1)' }}>{l.businessName}</td>
                           <td style={{ padding:'10px 12px',color:'var(--text-2)' }}>{l.location}</td>
                           <td style={{ padding:'10px 12px',color:'var(--text-2)',fontSize:'12px' }}>{l.websiteUrl || '—'}</td>
@@ -2029,17 +2553,85 @@ export default function OperationsPage() {
         </>
       )}
 
+      {/* ── Direct In-Screen Delete Confirmation Modal ── */}
+      {sheetToDelete && (
+        <>
+          <div 
+            onClick={() => !isDeletingSheet && setSheetToDelete(null)} 
+            style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.70)', backdropFilter:'blur(4px)', zIndex:300 }} 
+          />
+          <div style={{
+            position:'fixed', top:'50%', left:'50%', transform:'translate(-50%,-50%)',
+            width:'min(92vw, 440px)', background:'var(--bg-elevated)', border: '1px solid var(--border-subtle)',
+            borderRadius:'var(--r-xl)', zIndex:301, padding:'24px', boxShadow:'0 24px 60px rgba(0,0,0,.5)'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
+              <div style={{
+                width: 40, height: 40, borderRadius: '50%', background: 'rgba(239, 68, 68, 0.12)',
+                border: '1px solid rgba(239, 68, 68, 0.25)', display: 'flex', alignItems: 'center',
+                justifyContent: 'center', color: 'var(--red)', flexShrink: 0
+              }}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <polyline points="3,6 5,6 21,6"/>
+                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                  <line x1="10" y1="11" x2="10" y2="17"/>
+                  <line x1="14" y1="11" x2="14" y2="17"/>
+                </svg>
+              </div>
+              <div>
+                <h3 style={{ fontSize:'16px', fontWeight:700, color:'var(--text-1)', margin:0 }}>Delete Lead Sheet</h3>
+                <span style={{ fontSize:'11px', color:'var(--text-3)', fontFamily:'monospace' }}>{sheetToDelete.sheetId}</span>
+              </div>
+            </div>
+
+            <p style={{ fontSize:'13px', color:'var(--text-2)', lineHeight:1.5, marginBottom:18 }}>
+              Are you sure you want to delete <strong style={{ color: 'var(--text-1)' }}>&ldquo;{sheetToDelete.name}&rdquo;</strong>? This action will permanently remove this sheet and its scraped leads.
+            </p>
+
+            {deleteSheetError && (
+              <div style={{ padding: '8px 12px', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid var(--red)', borderRadius: 'var(--r-md)', color: 'var(--red)', fontSize: '12px', marginBottom: 16 }}>
+                {deleteSheetError}
+              </div>
+            )}
+
+            <div style={{ display:'flex', gap:10, justifyContent:'flex-end' }}>
+              <button 
+                onClick={() => setSheetToDelete(null)} 
+                disabled={isDeletingSheet}
+                className="btn btn-ghost" 
+                style={{ padding:'8px 16px', fontSize:'12px' }}
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={confirmDeleteSheet} 
+                disabled={isDeletingSheet}
+                className="btn" 
+                style={{ 
+                  padding:'8px 18px', fontSize:'12px', fontWeight:600,
+                  background: 'var(--red)', color: '#fff', border: 'none',
+                  opacity: isDeletingSheet ? 0.7 : 1, cursor: isDeletingSheet ? 'not-allowed' : 'pointer',
+                  display: 'flex', alignItems: 'center', gap: 6
+                }}
+              >
+                {isDeletingSheet ? 'Deleting...' : 'Delete Sheet'}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
     </div>
   );
 }
 
 const selectStyle = {
-  background: 'var(--bg-input)',
+  background: 'var(--bg-surface)',
   border: '1px solid var(--border-subtle)',
   borderRadius: 'var(--r-md)',
   padding: '0 12px',
   height: 38,
-  color: 'var(--text-2)',
+  color: 'var(--text-1)',
   fontSize: '13px',
   outline: 'none',
   cursor: 'pointer'

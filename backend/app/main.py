@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-import sentry_sdk
+try:
+    import sentry_sdk
+except ImportError:
+    sentry_sdk = None
 import structlog
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
@@ -10,6 +13,13 @@ from sqlalchemy import text
 
 from backend.app.api import router
 from backend.app.api_services import router as api_services_router
+from backend.app.api_operations import router as api_operations_router
+from backend.app.api_analytics import router as api_analytics_router
+from backend.app.api_observability import router as api_observability_router
+from backend.app.api_proposals import router as api_proposals_router
+from backend.app.api_delivery import router as api_delivery_router
+from backend.app.api_customer_success import router as api_customer_success_router
+from backend.app.api_benchmark import router as api_benchmark_router
 from backend.app.config import get_settings
 from backend.app.middleware import APIRateLimiterMiddleware, AuditLoggerMiddleware
 
@@ -52,6 +62,14 @@ app.add_middleware(
 )
 app.include_router(router, prefix="/api")
 app.include_router(api_services_router)
+app.include_router(api_operations_router, prefix="/api")
+app.include_router(api_analytics_router, prefix="/api")
+app.include_router(api_observability_router, prefix="/api")
+app.include_router(api_observability_router)
+app.include_router(api_proposals_router, prefix="/api")
+app.include_router(api_delivery_router, prefix="/api")
+app.include_router(api_customer_success_router, prefix="/api")
+app.include_router(api_benchmark_router)
 
 
 @app.middleware("http")
@@ -60,11 +78,6 @@ async def security_headers(request: Request, call_next):
     if get_settings().app_env == "production":
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     return response
-
-
-@app.get("/health")
-async def health() -> JSONResponse:
-    return JSONResponse({"status": "ok"})
 
 
 @app.get("/ready")
