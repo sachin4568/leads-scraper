@@ -2529,21 +2529,43 @@ export default function OperationsPage() {
                   <table style={{ width:'100%',borderCollapse:'collapse' }}>
                     <thead>
                       <tr style={{ borderBottom:'1px solid var(--border-faint)' }}>
-                        {['Lead ID', 'Business Name', 'Location', 'Website', 'Phone'].map(col => (
+                        {['Lead ID', 'Business Name', 'Location', 'Website', 'Email'].map(col => (
                           <th key={col} style={{ padding:'8px 12px',fontSize:'10px',fontWeight:600,color:'var(--text-3)',textTransform:'uppercase',letterSpacing:'.07em',textAlign:'left' }}>{col}</th>
                         ))}
                       </tr>
                     </thead>
                     <tbody>
-                      {previewLeads.map((l, idx) => (
-                        <tr key={l.leadId || idx} style={{ borderBottom:'1px solid var(--border-faint)' }}>
-                          <td style={{ padding:'10px 12px',fontSize:'11px',fontFamily:'monospace',color:'var(--text-3)' }}>{l.leadId || `${openRawSheet.sheetId}-${String(idx + 1).padStart(2, '0')}`}</td>
-                          <td style={{ padding:'10px 12px',fontWeight:600,color:'var(--text-1)' }}>{l.businessName}</td>
-                          <td style={{ padding:'10px 12px',color:'var(--text-2)' }}>{l.location}</td>
-                          <td style={{ padding:'10px 12px',color:'var(--text-2)',fontSize:'12px' }}>{l.websiteUrl || '—'}</td>
-                          <td style={{ padding:'10px 12px',color:'var(--text-2)',fontSize:'12px' }}>{l.contactPhone || '—'}</td>
-                        </tr>
-                      ))}
+                      {previewLeads.map((l, idx) => {
+                        const emailVal = l.contactEmail || l.email;
+                        return (
+                          <tr key={l.leadId || idx} style={{ borderBottom:'1px solid var(--border-faint)' }}>
+                            <td style={{ padding:'10px 12px',fontSize:'11px',fontFamily:'monospace',color:'var(--text-3)' }}>{l.leadId || `${openRawSheet.sheetId}-${String(idx + 1).padStart(2, '0')}`}</td>
+                            <td style={{ padding:'10px 12px',fontWeight:600,color:'var(--text-1)' }}>{l.businessName}</td>
+                            <td style={{ padding:'10px 12px',color:'var(--text-2)' }}>{l.location}</td>
+                            <td style={{ padding:'10px 12px',color:'var(--text-2)',fontSize:'12px' }}>
+                              {l.websiteUrl ? (
+                                <a href={l.websiteUrl.startsWith('http') ? l.websiteUrl : `https://${l.websiteUrl}`} target="_blank" rel="noreferrer" onClick={e=>e.stopPropagation()} style={{ color:'var(--blue)', textDecoration:'none' }}>
+                                  {l.websiteUrl.replace(/^https?:\/\//, '').replace(/\/$/, '')}
+                                </a>
+                              ) : '—'}
+                            </td>
+                            <td style={{ padding:'10px 12px',fontSize:'12px' }}>
+                              {emailVal ? (
+                                <a 
+                                  href={`mailto:${emailVal}`} 
+                                  onClick={e => e.stopPropagation()} 
+                                  style={{ color:'var(--pink)', textDecoration:'none', fontWeight:600, display:'inline-flex', alignItems:'center', gap:'4px' }}
+                                  title="Send outreach email"
+                                >
+                                  <span>✉</span> {emailVal}
+                                </a>
+                              ) : (
+                                <span style={{ color:'var(--text-3)' }}>{l.contactPhone || 'No email found'}</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>

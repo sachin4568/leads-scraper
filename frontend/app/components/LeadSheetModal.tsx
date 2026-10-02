@@ -158,8 +158,8 @@ export function LeadSheetModal({ sheet, onClose, initialFullScreen = false }: { 
   const conv = sheet.leads.filter(l=>l.status==='converted').length;
 
   const exportCSV = () => {
-    const headers = ['Lead ID','Business','Location','Website','Phone','Priority Score','Status'];
-    const rows = sheet.leads.map(l => [l.leadId, l.businessName, l.location, l.websiteUrl||'', l.contactPhone||l.contactEmail||'', l.priorityScore, l.status]);
+    const headers = ['Lead ID','Business','Location','Website','Email','Phone','Priority Score','Status'];
+    const rows = sheet.leads.map(l => [l.leadId, l.businessName, l.location, l.websiteUrl||'', l.contactEmail||(l as any).email||'', l.contactPhone||'', l.priorityScore, l.status]);
     const csv = [headers, ...rows].map(r => r.map(c => `"${c}"`).join(',')).join('\n');
     const blob = new Blob([csv], {type:'text/csv'});
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `${sheet.name}.csv`; a.click();

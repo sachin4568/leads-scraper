@@ -7,7 +7,8 @@ import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import unquote, urljoin, urlparse
+import urllib.parse
 
 import httpx
 
@@ -188,7 +189,12 @@ class ProductionWebsiteEnricher:
 
         # Find all href attributes
         raw_hrefs = re.findall(r'<a[^>]*href=["\']([^"\']+)["\']', html, re.IGNORECASE)
-        priority_keywords = ["contact", "about", "services", "menu", "story"]
+        # Prioritize pages where personal and owner emails are published
+        priority_keywords = [
+            "team", "our-team", "staff", "leadership", "management", "founder", "owner", 
+            "people", "meet", "doctor", "doctors", "agents", "attorneys", "bio", 
+            "about", "about-us", "contact", "contact-us", "services"
+        ]
 
         candidate_links: list[tuple[int, str]] = []
         seen: set[str] = {base_url.rstrip("/")}
@@ -226,41 +232,127 @@ class ProductionWebsiteEnricher:
         contacts = ExtractedContacts()
         html_lower = html.lower()
 
-        # 1. Email extraction (mailto + regex)
-        mailtos = re.findall(r'href=["\']mailto:([^"?\'\s]+)', html, re.IGNORECASE)
+        # Comprehensive company/role prefixes that must NEVER be used for personal outreach
+        role_prefixes = {
+            "info", "contact", "contactus", "contact-us", "sales", "hello", "support",
+            "marketing", "admin", "administrator", "office", "officeadmin", "help",
+            "helpdesk", "inquiries", "inquiry", "enquiries", "enquiry", "billing",
+            "accounts", "accounting", "press", "media", "jobs", "careers", "career",
+            "webmaster", "postmaster", "hostmaster", "editor", "editors", "news",
+            "newsletter", "campaigns", "booking", "bookings", "appointments", "appointment",
+            "foundation", "general", "service", "services", "customerservice", "customer",
+            "frontdesk", "reception", "desk", "mail", "team", "feedback", "donotreply",
+            "no-reply", "noreply", "privacy", "legal", "compliance", "hr", "humanresources",
+            "security", "orders", "order", "quote", "quotes", "estimate", "estimates",
+            "inbox", "mailroom", "leads", "lead", "customercare", "helpcenter", "ops",
+            "operations", "hi", "enquire", "receptionist", "reservations", "reservation",
+            "dispatch", "main", "store", "shop", "hq"
+        }
+
+        def is_role_email(local_p: str) -> bool:
+            clean_lp = re.sub(r"[0-9_\-\.]+$", "", local_p.lower())
+            if clean_lp in role_prefixes:
+                return True
+            for rp in role_prefixes:
+                if local_p.lower() == rp or local_p.lower().startswith((f"{rp}.", f"{rp}_", f"{rp}-")):
+                    return True
+            return False
+
+        # 1. Email extraction (mailto + regex + obfuscation + json-ld)
+        extracted_candidates: list[str] = []
+
+        # 1a. mailto: links (including URL decoded)
+        mailtos = re.findall(r'href=["\']mailto:([^"?\'\s>]+)', html, re.IGNORECASE)
+        for m in mailtos:
+            unquoted = urllib.parse.unquote(m).strip()
+            if unquoted:
+                extracted_candidates.append(unquoted)
+
+        # 1b. Raw regex emails
         raw_emails = re.findall(r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+', html)
-        
+        extracted_candidates.extend(raw_emails)
+
+        # 1c. Obfuscated emails: e.g. name [at] domain.com or name (at) domain.com
+        obfuscated = re.findall(
+            r'([a-zA-Z0-9_.+-]+)\s*(?:\[at\]|\(at\)|&#64;|%40|\s+at\s+)\s*([a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)',
+            html,
+            re.IGNORECASE
+        )
+        for ob_user, ob_domain in obfuscated:
+            extracted_candidates.append(f"{ob_user.strip()}@{ob_domain.strip()}")
+
+        # 1d. JSON-LD schema emails
+        json_lds_emails = re.findall(r'"email"\s*:\s*"([^"]+)"', html, re.IGNORECASE)
+        extracted_candidates.extend(json_lds_emails)
+
+        # Score and deduplicate personal emails
+        scored_emails: list[tuple[float, str]] = []
         seen_emails: set[str] = set()
-        for em in mailtos + raw_emails:
-            clean_em = em.strip().lower()
+        page_lower = page_url.lower()
+
+        # Keywords that indicate owner, executive, doctor, or direct decision maker
+        personal_context_keywords = [
+            "owner", "founder", "co-founder", "ceo", "president", "director", "partner",
+            "principal", "manager", "dr", "doctor", "physician", "attorney", "lawyer",
+            "chiropractor", "dentist", "surgeon", "consultant"
+        ]
+
+        for em in extracted_candidates:
+            clean_em = em.strip().lower().strip(".,;:!'\"<>(){}[] \t\n\r")
             if "@" not in clean_em:
                 continue
             local_part, em_domain = clean_em.split("@", 1)
             ext = clean_em.split(".")[-1] if "." in clean_em else ""
-            
+
             is_telemetry = (
                 "sentry" in em_domain
                 or "wixpress.com" in em_domain
                 or "cloudflare.com" in em_domain
                 or "schema.org" in em_domain
                 or "w3.org" in em_domain
+                or "example.com" in em_domain
             )
-            
-            role_prefixes = {
-                "info", "contact", "sales", "hello", "support", "marketing", "admin", "office",
-                "help", "inquiries", "billing", "press", "media", "jobs", "careers", "webmaster",
-                "editor", "editors", "news", "campaigns", "booking", "appointments", "foundation"
-            }
-            
+
+            # Strictly skip invalid, telemetry, and generic company/role emails
             if (
-                ext not in IGNORED_EMAIL_EXTENSIONS 
-                and not is_telemetry 
-                and local_part not in role_prefixes
-                and len(clean_em) <= 100 
-                and clean_em not in seen_emails
+                ext in IGNORED_EMAIL_EXTENSIONS
+                or is_telemetry
+                or is_role_email(local_part)
+                or len(clean_em) > 100
+                or clean_em in seen_emails
+                or not re.match(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$", clean_em)
             ):
-                seen_emails.add(clean_em)
-                contacts.emails.append({"email": clean_em, "source_page": page_url})
+                continue
+
+            seen_emails.add(clean_em)
+
+            # Calculate person priority score
+            score = 10.0
+
+            # Signal 1: Page context - team, about, staff, leadership
+            if any(k in page_lower for k in ("team", "staff", "leadership", "people", "founder", "owner", "about", "bio")):
+                score += 35.0
+
+            # Signal 2: Name structure (first.last, first_last, first-last)
+            if any(sep in local_part for sep in (".", "_", "-")):
+                score += 25.0
+            elif len(local_part) >= 4 and local_part.isalpha():
+                score += 15.0
+
+            # Signal 3: Nearby HTML context mentions person/owner titles
+            em_escaped = re.escape(clean_em)
+            match_pos = html_lower.find(clean_em)
+            if match_pos != -1:
+                surrounding = html_lower[max(0, match_pos - 120): min(len(html_lower), match_pos + 120)]
+                if any(kw in surrounding for kw in personal_context_keywords):
+                    score += 40.0
+
+            scored_emails.append((score, clean_em))
+
+        # Sort highest personal score first
+        scored_emails.sort(key=lambda x: x[0], reverse=True)
+        for _, em_val in scored_emails:
+            contacts.emails.append({"email": em_val, "source_page": page_url})
 
         # 2. Phone extraction (tel + formatted phone regex)
         tels = re.findall(r'href=["\']tel:([^"\'\s]+)', html, re.IGNORECASE)

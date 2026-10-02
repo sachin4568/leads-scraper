@@ -1,4 +1,4 @@
-﻿from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session
 import uuid
 import logging
 from datetime import datetime, UTC
@@ -81,6 +81,9 @@ class RawLeadEnricher:
                 
                 signals["emails_found"] = len(emails_found)
                 signals["best_email"] = emails_found[0]
+                raw_lead.email = emails_found[0]
+                self.db.add(raw_lead)
+                self.db.commit()
             else:
                 signals["emails_found"] = 0
                 missing.append("business_email")

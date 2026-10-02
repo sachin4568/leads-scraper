@@ -683,8 +683,15 @@ export default function OperationsLeadsPage() {
                         <div style={{ fontWeight: 600, color: 'var(--text-1)', fontSize: '13px' }}>
                           {lead.business_name}
                         </div>
-                        <div style={{ fontSize: '11px', color: 'var(--text-2)', marginTop: '2px' }}>
-                          {lead.phone || 'No direct phone'} {lead.email ? `• ${lead.email}` : ''}
+                        <div style={{ fontSize: '11px', color: 'var(--text-2)', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          {lead.email ? (
+                            <a href={`mailto:${lead.email}`} onClick={e => e.stopPropagation()} style={{ color: 'var(--pink)', fontWeight: 600, textDecoration: 'none' }}>
+                              ✉ {lead.email}
+                            </a>
+                          ) : (
+                            <span style={{ color: 'var(--text-3)' }}>No direct email</span>
+                          )}
+                          {lead.phone ? <span style={{ color: 'var(--text-3)' }}>• 📞 {lead.phone}</span> : ''}
                         </div>
 
                         {/* Click-to-Execute Quick Links */}

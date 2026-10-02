@@ -1058,19 +1058,32 @@ def public_update_sheet(sheet_id: str, payload: dict) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="Invalid sheet ID format")
 
     with SessionLocal() as session:
+        # Check SegregatedLeadSheet
         sheet = session.scalar(select(SegregatedLeadSheet).where(SegregatedLeadSheet.id == s_uuid))
-        if not sheet:
-            raise HTTPException(status_code=404, detail="Sheet not found")
+        if sheet:
+            name = payload.get("name")
+            if name:
+                sheet.name = name
+            google_sheets_url = payload.get("googleSheetsUrl") or payload.get("google_sheets_url")
+            if google_sheets_url is not None:
+                sheet.google_sheets_url = google_sheets_url
 
-        name = payload.get("name")
-        if name:
-            sheet.name = name
-        google_sheets_url = payload.get("googleSheetsUrl") or payload.get("google_sheets_url")
-        if google_sheets_url is not None:
-            sheet.google_sheets_url = google_sheets_url
+            session.commit()
+            return {"id": str(sheet.id), "name": sheet.name, "googleSheetsUrl": sheet.google_sheets_url}
 
-        session.commit()
-        return {"id": str(sheet.id), "name": sheet.name, "googleSheetsUrl": sheet.google_sheets_url}
+        # Support renaming RawLeadSheet
+        raw_sheet = session.scalar(select(RawLeadSheet).where(RawLeadSheet.id == s_uuid))
+        if raw_sheet:
+            name = payload.get("name")
+            if name:
+                raw_sheet.name = name
+            scrape_job = session.scalar(select(ScrapeJob).where(ScrapeJob.id == s_uuid))
+            if scrape_job:
+                scrape_job.sheet_name = name
+            session.commit()
+            return {"id": str(raw_sheet.id), "name": raw_sheet.name}
+
+        raise HTTPException(status_code=404, detail="Sheet not found")
 
 
 @router.delete("/sheets/{sheet_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -1082,11 +1095,21 @@ def public_delete_sheet(sheet_id: str) -> None:
 
     with SessionLocal() as session:
         sheet = session.scalar(select(SegregatedLeadSheet).where(SegregatedLeadSheet.id == s_uuid))
-        if not sheet:
-            raise HTTPException(status_code=404, detail="Sheet not found")
+        if sheet:
+            session.delete(sheet)
+            session.commit()
+            return
 
-        session.delete(sheet)
-        session.commit()
+        raw_sheet = session.scalar(select(RawLeadSheet).where(RawLeadSheet.id == s_uuid))
+        if raw_sheet:
+            session.delete(raw_sheet)
+            job = session.scalar(select(ScrapeJob).where(ScrapeJob.id == s_uuid))
+            if job:
+                session.delete(job)
+            session.commit()
+            return
+
+        raise HTTPException(status_code=404, detail="Sheet not found")
 
 
 @router.post("/validate-location")

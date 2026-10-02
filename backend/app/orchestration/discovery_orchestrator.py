@@ -760,11 +760,29 @@ class DiscoveryOrchestrator:
                             raw_data=rec.raw_data or {},
                         )
                         db.add(r_lead)
-                        # Update last_progress_at in the same transaction
+                        # Update progress in DB so the polling endpoint can return live data
                         from sqlalchemy import func
                         job = db.get(app_models.ScrapeJob, self.job_state["id"])
                         if job:
                             job.last_progress_at = func.now()
+                            job.progress_percent = self.job_state.get("progress_percent", 0.0)
+                            job.leads_scraped = self.metrics.saved_count
+                            job.fetched_count = self.metrics.fetched_count
+                            job.discovered_count = self.metrics.fetched_count
+                            job.valid_count = self.metrics.validated_count
+                            job.duplicate_count = self.metrics.duplicate_count
+                            job.current_source = self.job_state.get("current_source", "")[:64] if self.job_state.get("current_source") else None
+                            job.current_query = self.job_state.get("current_query", "")[:255] if self.job_state.get("current_query") else None
+                        # Also update the RawLeadSheet mirror
+                        raw_sheet = db.get(app_models.RawLeadSheet, self.job_state["id"])
+                        if raw_sheet:
+                            raw_sheet.progress_percent = self.job_state.get("progress_percent", 0.0)
+                            raw_sheet.leads_scraped = self.metrics.saved_count
+                            raw_sheet.fetched_count = self.metrics.fetched_count
+                            raw_sheet.discovered_count = self.metrics.fetched_count
+                            raw_sheet.valid_count = self.metrics.validated_count
+                            raw_sheet.duplicate_count = self.metrics.duplicate_count
+                            raw_sheet.current_source = self.job_state.get("current_source", "")[:64] if self.job_state.get("current_source") else None
                     db.commit()
                     try:
                         from backend.app.worker import celery_app
@@ -956,6 +974,26 @@ class DiscoveryOrchestrator:
                 "enr_res": enr_res,
                 "v_res": v_res,
             })
+
+            # Instantly persist discovered personal email to RawLead in database
+            if effective_email or effective_website:
+                try:
+                    with SessionLocal() as db_update:
+                        import backend.app.models as app_models
+                        rl = db_update.scalar(
+                            select(app_models.RawLead).where(
+                                app_models.RawLead.sheet_id == self.job_state["id"],
+                                app_models.RawLead.business_name == rec.business_name,
+                            )
+                        )
+                        if rl:
+                            if effective_email:
+                                rl.email = effective_email
+                            if effective_website:
+                                rl.website = effective_website
+                            db_update.commit()
+                except Exception as up_err:
+                    logger.debug(f"[DiscoveryOrchestrator] Immediate lead email update note: {up_err}")
 
         logger.info(f"[DiscoveryOrchestrator] Stage 2 Completed: Verified signals for {len(verified_results)} candidates.")
         return verified_results
@@ -1248,7 +1286,6 @@ class DiscoveryOrchestrator:
                     existing_raw_lead.phone = effective_phone
 
                     db.commit()
-                    db.close()
 
             publish_job_progress(
                 str(self.job_state["id"]),
