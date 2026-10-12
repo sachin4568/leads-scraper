@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
 from backend.app.database import get_db
@@ -17,6 +18,7 @@ from backend.app.models import (
     Lead,
     OutreachCampaign,
     ScrapeJob,
+    ServiceOpportunity,
     ServiceScore,
     SuppressionList,
     Workspace,
@@ -47,6 +49,8 @@ from backend.app.security import decode_access_token
 from backend.app.worker import process_scrape_job_task
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
 bearer = HTTPBearer(auto_error=False)
 
 
@@ -185,6 +189,7 @@ def export_leads_xlsx(
 @router.post("/scrape-jobs", response_model=ScrapeJobRead, status_code=status.HTTP_201_CREATED)
 def create_scrape_job(
     payload: ScrapeJobCreate,
+
     workspace_id: uuid.UUID = Depends(current_workspace_id),
     db: Session = Depends(get_db),
 ) -> ScrapeJob:
@@ -195,7 +200,7 @@ def create_scrape_job(
         city=payload.city,
         locations=payload.locations,
     )
-    if not is_valid_loc or not loc_scope:
+    if not is_valid_loc or loc_scope is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=loc_err or "Invalid location configuration.",
@@ -212,8 +217,31 @@ def create_scrape_job(
     allowed_keys = {c.key for c in ScrapeJob.__table__.columns}
     job_data = {k: v for k, v in payload_dict.items() if k in allowed_keys}
     
+    from backend.app.models import RawLeadSheet, get_next_raw_sheet_number
     job = ScrapeJob(workspace_id=workspace_id, **job_data)
     db.add(job)
+    db.flush()
+
+    raw_sheet = RawLeadSheet(
+        id=job.id,
+        workspace_id=workspace_id,
+        sheet_number=get_next_raw_sheet_number(db),
+        name=f"{job.niche} - {job.state or job.region or 'Leads'}",
+        niche=job.niche,
+        country=job.country,
+        region=job.region,
+        state=job.state,
+        target_lead_count=job.target_lead_count,
+        service=job.service,
+        status="PENDING",
+        sources=job.sources,
+        enrichments=job.enrichments,
+        leads_scraped=0,
+        discovered_count=0,
+        valid_count=0,
+        progress_percent=0.0,
+    )
+    db.add(raw_sheet)
     db.commit()
     db.refresh(job)
     print("=== TYPE OF PROCESS_SCRAPE_JOB_TASK ===")
@@ -1156,7 +1184,7 @@ def get_lead_opportunities(workspace_id: uuid.UUID, lead_id: uuid.UUID, db: Sess
 
 @router.post('/workspaces/{workspace_id}/leads/{lead_id}/enrich')
 def trigger_enrich(workspace_id: uuid.UUID, lead_id: uuid.UUID, db: Session = Depends(get_db)):
-    from backend.app.enrichment.pipelines import enrich_website_pipeline
+    from backend.app.enrichment.website_pipeline import enrich_website_pipeline
     enrich_website_pipeline.delay(str(lead_id), str(workspace_id))
     return {'status': 'queued'}
 

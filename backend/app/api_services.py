@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import csv
 import io
@@ -1083,6 +1083,15 @@ def public_update_sheet(sheet_id: str, payload: dict) -> dict[str, Any]:
             session.commit()
             return {"id": str(raw_sheet.id), "name": raw_sheet.name}
 
+        # Fallback: job was created via legacy endpoint — only ScrapeJob exists, no RawLeadSheet
+        scrape_job = session.scalar(select(ScrapeJob).where(ScrapeJob.id == s_uuid))
+        if scrape_job:
+            name = payload.get("name")
+            if name:
+                scrape_job.sheet_name = name
+            session.commit()
+            return {"id": str(scrape_job.id), "name": scrape_job.sheet_name or scrape_job.niche or str(scrape_job.id)}
+
         raise HTTPException(status_code=404, detail="Sheet not found")
 
 
@@ -1131,3 +1140,83 @@ def public_validate_location(payload: dict) -> dict[str, Any]:
         "canonical_location": loc_scope.to_dict() if loc_scope else None,
     }
 
+
+# ---------------------------------------------------------------------------
+# Re-enrichment endpoint — POST /scrape-jobs/{job_id}/re-enrich-emails
+# ---------------------------------------------------------------------------
+
+import re as _re
+
+_PHONE_PATTERN_RE = _re.compile(r"^\(?\d{3}\)?[\s\-]\d{3}[\s\-]\d{4}$")
+
+
+def _needs_email_enrich(email: str | None) -> bool:
+    """Returns True if the email field is missing or contains a phone number."""
+    if not email:
+        return True
+    return bool(_PHONE_PATTERN_RE.match(email.strip()))
+
+
+@router.post("/scrape-jobs/{job_id}/re-enrich-emails")
+def re_enrich_job_emails(job_id: str) -> dict[str, Any]:
+    """
+    Re-runs email discovery for all leads in a job whose email field is empty
+    or contains a phone number. Uses ProductionWebsiteEnricher directly.
+
+    Safe to call multiple times (idempotent: leads with valid emails are always
+    skipped). Returns HTTP 200 with updated/skipped/failed counts even when the
+    job does not exist (treated as having zero leads).
+    """
+    from backend.app.enrichment.website_enricher import ProductionWebsiteEnricher
+
+    try:
+        job_uuid = uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=400, detail="Invalid job_id format — must be a UUID"
+        )
+
+    with SessionLocal() as db:
+        job = db.scalar(select(RawLeadSheet).where(RawLeadSheet.id == job_uuid))
+        if not job:
+            # Job not found — return empty counts rather than 404 so the
+            # endpoint is safe to call retroactively on any job ID.
+            return {"job_id": job_id, "updated": 0, "skipped": 0, "failed": 0}
+
+        leads = db.scalars(
+            select(RawLead).where(RawLead.sheet_id == job_uuid)
+        ).all()
+
+    enricher = ProductionWebsiteEnricher(max_pages=10)
+    updated, skipped, failed = 0, 0, 0
+
+    for lead in leads:
+        if not _needs_email_enrich(lead.email):
+            skipped += 1
+            continue
+        if not lead.website:
+            skipped += 1
+            continue
+        try:
+            enr_res = enricher.enrich_website(
+                target_url=lead.website,
+                provider_email=None,
+            )
+            if enr_res and enr_res.contacts and enr_res.contacts.emails:
+                best_email = enr_res.contacts.emails[0].get("email")
+                if best_email:
+                    with SessionLocal() as db2:
+                        rl = db2.get(RawLead, lead.id)
+                        if rl:
+                            rl.email = best_email
+                            db2.commit()
+                    updated += 1
+                else:
+                    skipped += 1
+            else:
+                skipped += 1
+        except Exception as err:
+            logger.warning(f"[re-enrich-emails] Failed for lead {lead.id}: {err}")
+            failed += 1
+
+    return {"job_id": job_id, "updated": updated, "skipped": skipped, "failed": failed}

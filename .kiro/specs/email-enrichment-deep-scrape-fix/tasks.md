@@ -1,0 +1,153 @@
+# Implementation Plan
+
+- [x] 1. Write bug condition exploration test
+  - **Property 1: Bug Condition** - Email Crawl Gated or Shallow Scrape
+  - **CRITICAL**: This test MUST FAIL on unfixed code — failure confirms the bug exists
+  - **DO NOT attempt to fix the test or the code when it fails**
+  - **NOTE**: This test encodes the expected behavior — it will validate the fix when it passes after implementation
+  - **GOAL**: Surface counterexamples that demonstrate each of the four bug paths
+  - **Scoped PBT Approach**: For Path A and Path B (deterministic failures), scope properties to the concrete failing cases for reproducibility
+  - **Path A — Gate test**: Call `stage_2_enrich_and_verify` with `job_state={"enrichments": []}` and a candidate with `website="https://example.com"` whose `rec.email` is `"(905) 334-0732"`. Assert `effective_email` is a real email address, not a phone number. (isBugCondition: `NOT bool(job_state.get("enrichments"))`)
+  - **Path B — Shallow crawl test**: Instantiate `ProductionWebsiteEnricher(max_pages=5)`. Call `enrich_website` with a mock site that has no keyword-matched paths (`/our-story` only) but the page contains an email address. Assert the email is discovered. (isBugCondition: `website_has_no_priority_keyword_pages AND max_pages <= 5`)
+  - **Path C — Facebook About test**: Call `enricher.scrape_facebook_about("https://facebook.com/sunrisedental")` on unfixed code. Assert the method exists and returns a list. (isBugCondition: `lead_has_facebook_url AND NOT facebook_about_scraping_implemented()`)
+  - **Path D — Re-enrichment endpoint test**: Call `POST /scrape-jobs/{job_id}/re-enrich-emails` on unfixed code. Assert HTTP 200 is returned. (isBugCondition: `lead.email IS NULL AND NOT reenrichment_endpoint_exists()`)
+  - Run tests on UNFIXED code
+  - **EXPECTED OUTCOME**: Tests FAIL — Path A returns phone number, Path B returns empty emails, Path C raises AttributeError, Path D returns HTTP 404/405
+  - Document counterexamples found:
+    - Path A: `effective_email == "(905) 334-0732"` (phone number in email column)
+    - Path B: `enr_res.contacts.emails == []` despite email on `/our-story`
+    - Path C: `AttributeError: 'ProductionWebsiteEnricher' object has no attribute 'scrape_facebook_about'`
+    - Path D: HTTP 404 or 405 on the endpoint
+  - Mark task complete when tests are written, run, and all four failures are documented
+  - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 1.6_
+
+- [x] 2. Write preservation property tests (BEFORE implementing fix)
+  - **Property 2: Preservation** - Non-Buggy Lead Behaviour Is Unchanged
+  - **IMPORTANT**: Follow observation-first methodology
+  - Observe behavior on UNFIXED code for non-buggy inputs (cases where `NOT isBugCondition(X)`)
+  - **Observe** (Path A non-buggy): `stage_2_enrich_and_verify` with `enrichment_enabled=True` and lead that already has `email="info@abccorp.com"` — record returned `effective_email`
+  - **Observe** (domain cache): Call `enrich_website` twice for the same domain — record that second call returns from `_cache` without HTTP fetch
+  - **Observe** (conflict recording): Provide `provider_email="old@example.com"` that differs from crawled email — record that `conflicts` dict is populated
+  - **Observe** (phone validation): Lead where phone field is `REJECTED` — record that `effective_phone` is `None` and `effective_email` is unaffected
+  - **Observe** (no-website skip): Lead with `rec.website = None` — record that `enrich_website` is never called
+  - Write property-based test: for all leads where `isBugCondition(X)` is false, `stage_2_fixed(X).effective_email == stage_2_original(X).effective_email` — generates random `enrichments` values and email states automatically
+  - Write property-based test: for random `max_pages` values (1–20) and site HTML with only keyword-matched links, assert keyword links are always returned before generic links
+  - Run all tests on UNFIXED code
+  - **EXPECTED OUTCOME**: Tests PASS — confirms baseline behavior to preserve
+  - Mark task complete when tests are written, run, and passing on unfixed code
+  - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7_
+
+- [x] 3. Fix email-enrichment-deep-scrape (four-part bugfix)
+
+  - [x] 3.1 Remove enrichment_enabled early-return gate and introduce email_crawl_enabled flag
+    - File: `backend/app/orchestration/discovery_orchestrator.py`
+    - Remove the early-return block at lines 832–849 that returns baseline results when `enrichment_enabled = False`
+    - After `enrichment_enabled = bool(self.job_state.get("enrichments"))` add: `email_crawl_enabled = True` (email crawling is unconditional — runs whenever a website URL is present)
+    - Change the guard at line 908 from `if enrichment_enabled and has_website:` to `if email_crawl_enabled and has_website:` (Step 2b: email crawl runs unconditionally)
+    - Keep Step 2a guard (`if enrichment_enabled and not has_website:`) unchanged — zero-budget discovery remains optional
+    - Keep `if enrichment_enabled:` guard on `VerificationAndEvidenceEngine.verify_candidate(...)` unchanged (verification stays gated)
+    - Keep `if enrichment_enabled and v_res.field_results[...].verification_status == VerificationStatus.REJECTED:` field-sanitization guards unchanged
+    - Add baseline `v_res` assignment in the `else` branch (when `not enrichment_enabled`) so the per-lead code compiles without the early return
+    - _Bug_Condition: `NOT bool(job_state.get("enrichments"))` — Path A gate fires_
+    - _Expected_Behavior: `email_crawl_enabled = True` ensures `enrich_website` is called for every lead with a non-empty `rec.website`, regardless of `enrichment_enabled`_
+    - _Preservation: Step 2a (zero-budget discovery), verification gating, and field-rejection sanitization remain gated on `enrichment_enabled` — only Step 2b is decoupled_
+    - _Requirements: 2.1, 2.2_
+
+  - [x] 3.2 Increase max_pages to 10 and add generic-link fallback in _discover_internal_links
+    - File: `backend/app/enrichment/website_enricher.py`
+    - Change `__init__` default at line 134: `max_pages: int = 5` → `max_pages: int = 10`
+    - In `_discover_internal_links` (line 184), after the existing keyword-priority loop, add a fallback block: if `candidate_links` is empty after the keyword loop, iterate `raw_hrefs` and add any same-domain internal links (skipping `#`, `javascript:`, `mailto:`, `tel:` prefixes) with priority `len(priority_keywords)` so they sort after keyword matches
+    - Use `urljoin`, `urlparse` for URL normalisation (already imported)
+    - Add `seen` set deduplication for fallback links (same pattern as keyword-match loop)
+    - After appending fallback links, call `candidate_links.sort(key=lambda x: x[0])` before returning
+    - _Bug_Condition: `website_has_no_priority_keyword_pages AND max_pages <= 5` — Path B shallow crawl_
+    - _Expected_Behavior: when no keyword pages exist, fallback returns up to `max_pages - 1` generic same-domain links; keyword pages continue to be prioritised when present_
+    - _Preservation: `subpages_to_fetch = internal_links[: self.max_pages - 1]` slice unchanged; priority sort ordering preserved_
+    - _Requirements: 2.3, 2.4_
+
+  - [x] 3.3 Add scrape_facebook_about method to ProductionWebsiteEnricher
+    - File: `backend/app/enrichment/website_enricher.py`
+    - Add `scrape_facebook_about(self, facebook_url: str) -> list[dict[str, Any]]` method to `ProductionWebsiteEnricher`
+    - Normalise `facebook_url` to the `/about` path using `urlparse` (strip trailing `/` then append `/about`)
+    - Call `self._fetch_page(about_url)` inside a `try/except Exception`; return `[]` on any exception (log with `logger.warning`)
+    - If `page.html` is empty/falsy, return `[]`
+    - Otherwise call `self._extract_contacts_from_html(page.html, about_url).emails` and return the result
+    - Add call site in `stage_2_enrich_and_verify` (Step 2b, after email crawl): if `enr_res` is set and `enr_res.contacts.emails` is empty, check `discovered_socials.get("facebook")` or `rec.raw_data.get("facebook_url")`; if present, call `self.enricher.scrape_facebook_about(fb_url)` and assign result to `enr_res.contacts.emails` when non-empty
+    - _Bug_Condition: `lead_has_facebook_url AND NOT facebook_about_scraping_implemented()` — Path C no-FB-fallback_
+    - _Expected_Behavior: `scrape_facebook_about` returns email list from Facebook About HTML; empty list returned gracefully on error_
+    - _Preservation: only invoked as fallback when `enr_res.contacts.emails` is already empty; existing website-crawled emails are never overwritten_
+    - _Requirements: 2.5_
+
+  - [x] 3.4 Add POST /scrape-jobs/{job_id}/re-enrich-emails endpoint
+    - File: `backend/app/api_services.py`
+    - Add route `@router.post("/scrape-jobs/{job_id}/re-enrich-emails")` returning `dict[str, Any]`
+    - Parse and validate `job_id` as UUID (raise HTTP 400 on `ValueError`)
+    - Look up `RawLeadSheet` by UUID; raise HTTP 404 if not found
+    - Query all `RawLead` rows for the job
+    - Define `needs_email_enrich(email)`: returns `True` if `email` is falsy OR matches `PHONE_PATTERN = r"^\(?\d{3}\)?[\s\-]\d{3}[\s\-]\d{4}$"`
+    - For each lead where `needs_email_enrich(lead.email)` is true AND `lead.website` is non-empty: call `ProductionWebsiteEnricher(max_pages=10).enrich_website(target_url=lead.website, provider_email=None)`, then if emails found update `lead.email` to `enr_res.contacts.emails[0]["email"]` in a new session and increment `updated`
+    - Leads where `needs_email_enrich` is false OR `lead.website` is absent → increment `skipped`
+    - Any exception per lead → `logger.warning` and increment `failed`; do not abort the loop
+    - Return `{"job_id": job_id, "updated": updated, "skipped": skipped, "failed": failed}`
+    - Endpoint is idempotent: leads with valid emails are always skipped, so safe to call multiple times
+    - _Bug_Condition: `lead.email IS NULL OR is_phone_number(lead.email) AND NOT reenrichment_endpoint_exists()` — Path D no-retro-fix_
+    - _Expected_Behavior: endpoint returns HTTP 200 with update counts; only leads with missing/phone-number emails are re-enriched_
+    - _Preservation: leads with valid existing emails are skipped (skipped counter incremented) — never overwritten_
+    - _Requirements: 2.6_
+
+  - [x] 3.5 Verify bug condition exploration test now passes
+    - **Property 1: Expected Behavior** - Email Crawl Gated or Shallow Scrape
+    - **IMPORTANT**: Re-run the SAME tests from task 1 — do NOT write new tests
+    - The tests from task 1 encode the expected behavior; when they pass the bug is resolved
+    - Re-run all four path tests (Path A gate, Path B shallow crawl, Path C Facebook, Path D endpoint) on FIXED code
+    - **EXPECTED OUTCOME**: All four tests PASS
+      - Path A: `effective_email` is a real email address or `None`, never a phone number
+      - Path B: email on `/our-story` is discovered via fallback crawl
+      - Path C: `scrape_facebook_about` returns email list without AttributeError
+      - Path D: `POST /scrape-jobs/{job_id}/re-enrich-emails` returns HTTP 200
+    - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6_
+
+  - [x] 3.6 Verify preservation tests still pass
+    - **Property 2: Preservation** - Non-Buggy Lead Behaviour Is Unchanged
+    - **IMPORTANT**: Re-run the SAME tests from task 2 — do NOT write new tests
+    - Run preservation property tests from step 2 on FIXED code
+    - **EXPECTED OUTCOME**: All preservation tests PASS (confirms no regressions)
+      - Leads with existing valid emails are never overwritten
+      - Domain cache still returns cached results without re-fetching
+      - Conflict recording still populates `conflicts` dict
+      - Phone rejection still nullifies `effective_phone` independently of `effective_email`
+      - No-website leads still skip `enrich_website` entirely
+    - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7_
+
+- [x] 4. Write unit tests for all four changes
+  - File: create `backend/tests/test_email_enrichment_fix.py` (or alongside existing test files if a tests directory exists)
+  - **stage_2_enrich_and_verify tests (Change 1):**
+    - `test_email_crawl_runs_when_enrichment_disabled`: mock `self.enricher.enrich_website` to return a result with emails; call `stage_2_enrich_and_verify` with `job_state={"enrichments": []}` and a lead with a website URL; assert `enr_res` was called and `effective_email` is not a phone number
+    - `test_no_email_crawl_without_website`: call with `enrichment_enabled=False` and `rec.website=None`; assert `enrich_website` is never called
+    - `test_verification_still_gated_on_enrichment_enabled`: verify `VerificationAndEvidenceEngine.verify_candidate` is NOT called when `enrichment_enabled=False`
+  - **_discover_internal_links tests (Change 2):**
+    - `test_fallback_returns_generic_links_when_no_keyword_pages`: pass HTML containing only `/our-story`, `/pricing`, `/blog` links; assert returned list is non-empty
+    - `test_keyword_pages_precede_generic_fallback_links`: pass HTML with both `/contact` and `/our-story`; assert `/contact` appears before `/our-story` in the result
+    - `test_max_pages_default_is_10`: instantiate `ProductionWebsiteEnricher()` without arguments; assert `enricher.max_pages == 10`
+    - `test_fallback_excludes_external_and_anchor_links`: HTML contains `#section`, `javascript:void(0)`, `https://otherdomain.com/page`; assert none appear in fallback results
+  - **scrape_facebook_about tests (Change 3):**
+    - `test_scrape_facebook_about_extracts_email`: mock `_fetch_page` to return HTML containing `owner@example.com`; assert method returns list with that email
+    - `test_scrape_facebook_about_normalises_url_to_about_path`: assert the URL passed to `_fetch_page` ends with `/about`
+    - `test_scrape_facebook_about_returns_empty_on_fetch_error`: mock `_fetch_page` to raise `Exception`; assert method returns `[]` without raising
+    - `test_scrape_facebook_about_returns_empty_on_empty_html`: mock `_fetch_page` to return a page with `html=""`; assert returns `[]`
+  - **re_enrich_job_emails endpoint tests (Change 4):**
+    - `test_re_enrich_updates_leads_with_phone_number_emails`: seed lead with `email="(905) 334-0732"` and `website="https://example.com"`; mock `enrich_website` to return email; assert `updated=1, skipped=0`
+    - `test_re_enrich_skips_leads_with_valid_emails`: seed lead with `email="info@abc.com"`; assert `updated=0, skipped=1`
+    - `test_re_enrich_skips_leads_without_website`: seed lead with `email=None, website=None`; assert `updated=0, skipped=1`
+    - `test_re_enrich_returns_404_for_unknown_job`: call with a random UUID not in DB; assert HTTP 404
+    - `test_re_enrich_returns_400_for_invalid_job_id`: call with `job_id="not-a-uuid"`; assert HTTP 400
+    - `test_re_enrich_is_idempotent`: call endpoint twice; assert second call produces `updated=0` (email already valid after first call)
+  - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7_
+
+- [x] 5. Checkpoint — Ensure all tests pass
+  - Run the full test suite: `pytest backend/tests/ -v`
+  - Confirm all four path tests from task 1 now pass (bug fixed)
+  - Confirm all preservation tests from task 2 still pass (no regressions)
+  - Confirm all unit tests from task 4 pass
+  - If any test fails, diagnose root cause before patching — do not make incremental tweaks without understanding the failure
+  - Ensure all tests pass; ask the user if questions arise

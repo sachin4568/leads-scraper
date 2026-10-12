@@ -4,35 +4,41 @@
  * All functions are typed and ready to swap in for mock data.
  */
 
-const BASE = typeof window !== 'undefined' ? '' : (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000');
+const BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
 
 export async function fetchWithAuth<T>(path: string, options?: RequestInit, token?: string): Promise<T> {
+  const url = `${BASE}${path}`;
+  console.log('fetchWithAuth -> URL:', url, 'options:', options);
   const headers: Record<string, string> = { 'Content-Type': 'application/json', ...(options?.headers as Record<string, string>) };
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
   }
-  const res = await fetch(`${BASE}${path}`, {
-    ...options,
-    headers,
-  });
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`API ${res.status}: ${err}`);
-  }
-  if (res.status === 204) {
-    return {} as T;
-  }
-  const text = await res.text();
-  if (!text || !text.trim()) {
-    return {} as T;
-  }
   try {
-    return JSON.parse(text) as T;
-  } catch {
-    return text as unknown as T;
+    const res = await fetch(url, {
+      ...options,
+      headers,
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`API ${res.status}: ${err}`);
+    }
+    if (res.status === 204) {
+      return {} as T;
+    }
+    const text = await res.text();
+    if (!text || !text.trim()) {
+      return {} as T;
+    }
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      return text as unknown as T;
+    }
+  } catch (networkErr) {
+    console.error('Network fetch error:', networkErr);
+    throw networkErr;
   }
 }
-
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return fetchWithAuth<T>(path, options);
 }
@@ -82,7 +88,7 @@ export const api = {
     deduplication_mode?: string | null;
     quality_threshold?: string | null;
   }) =>
-    request<{ id: string; jobId?: string }>('/api/v1/scrape-jobs', {
+    request<{ id: string; jobId?: string }>('/api/scrape-jobs', {
       method: 'POST',
       body: JSON.stringify({
         niche: body.niche,

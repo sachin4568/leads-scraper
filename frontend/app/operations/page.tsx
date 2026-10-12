@@ -890,6 +890,24 @@ export default function OperationsPage() {
 
     try {
       const selectedCountryName = COUNTRIES.find(c => c.code === country)?.name || country;
+      console.log('Starting scrape payload:', {
+        niche: nVal,
+        city: locVal,
+        region: region,
+        country: selectedCountryName,
+        count: totalCount,
+        service: service,
+        sources: selectedSources,
+        plain_query: plainQuery ? plainQueryValue : null,
+        exact_match: exactMatch,
+        related_categories: relatedCategories,
+        locations: locations.length > 0 ? locations : [locVal],
+        search_mode: searchMode,
+        search_depth: searchDepth,
+        enrichments: Object.keys(enrichmentOptions).filter(k => enrichmentOptions[k]),
+        deduplication_mode: duplicateHandling,
+        quality_threshold: qualityFilter
+      });
       const res = await api.startScrape({
         niche: nVal,
         city: locVal,

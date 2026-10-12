@@ -131,7 +131,7 @@ _CACHE_TTL_SECONDS: float = 3600.0
 class ProductionWebsiteEnricher:
     """Bounded, SSRF-safe, ₹0 production website intelligence extractor."""
 
-    def __init__(self, timeout_seconds: float = 5.0, max_pages: int = 5, max_bytes_per_page: int = 500000) -> None:
+    def __init__(self, timeout_seconds: float = 5.0, max_pages: int = 10, max_bytes_per_page: int = 500000) -> None:
         self.timeout_seconds = timeout_seconds
         self.max_pages = max_pages
         self.max_bytes_per_page = max_bytes_per_page
@@ -214,18 +214,69 @@ class ProductionWebsiteEnricher:
             clean_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}".rstrip("/")
             if clean_url in seen:
                 continue
-            seen.add(clean_url)
 
-            # Check for keyword matches
+            # Check for keyword matches — only add to seen (and dedup) on a match,
+            # so that non-matching URLs remain available for the fallback loop below.
             path_lower = parsed.path.lower()
             for rank, kw in enumerate(priority_keywords):
                 if kw in path_lower:
+                    seen.add(clean_url)
                     candidate_links.append((rank, clean_url))
                     break
+
+        # Fallback: if no priority keyword pages were found, include any same-domain
+        # internal links as generic candidates so the crawler visits them instead of
+        # stopping at the homepage.
+        if not candidate_links:
+            for href in raw_hrefs:
+                href_clean = href.strip()
+                if not href_clean or href_clean.startswith(("#", "javascript:", "mailto:", "tel:")):
+                    continue
+                full_url = urljoin(base_url, href_clean)
+                parsed = urlparse(full_url)
+                if parsed.netloc.lower() != base_domain:
+                    continue
+                clean_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}".rstrip("/")
+                if clean_url in seen:
+                    continue
+                seen.add(clean_url)
+                # Use a low priority rank so keyword matches always win when present.
+                candidate_links.append((len(priority_keywords), clean_url))
 
         # Sort candidate links by keyword priority
         candidate_links.sort(key=lambda x: x[0])
         return [url for _, url in candidate_links]
+
+    def scrape_facebook_about(self, facebook_url: str) -> list[dict[str, Any]]:
+        """
+        Attempts to fetch the Facebook Business About page and extract email addresses.
+
+        Facebook aggressively blocks bots; this is a best-effort, single-fetch attempt.
+        The URL is normalised to the /about path before fetching.
+
+        Returns a list of email dicts in the same format as ExtractedContacts.emails
+        (e.g., [{"email": "owner@example.com", "source": "facebook_about"}]).
+        Returns an empty list on any error or when no emails are found.
+        """
+        try:
+            # Normalise to the /about path
+            parsed = urlparse(facebook_url)
+            about_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path.rstrip('/')}/about"
+
+            page = self._fetch_page(about_url)
+            if not page.html:
+                return []
+
+            contacts = self._extract_contacts_from_html(page.html, about_url)
+            # Tag each email with its source for traceability
+            for email_dict in contacts.emails:
+                email_dict.setdefault("source", "facebook_about")
+            return contacts.emails
+        except Exception as fb_err:
+            logger.warning(
+                f"[WebsiteEnricher] Facebook About scrape failed for {facebook_url}: {fb_err}"
+            )
+            return []
 
     def _extract_contacts_from_html(self, html: str, page_url: str) -> ExtractedContacts:
         """Extracts emails, phones, addresses, and WhatsApp links from HTML text."""

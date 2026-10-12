@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import logging
 import inspect
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
+
+# Phone number pattern — used to detect phone numbers stored in the email column
+_PHONE_IN_EMAIL_PATTERN = re.compile(r"^\(?\d{3}\)?[\s\-]\d{3}[\s\-]\d{4}$")
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -730,7 +734,31 @@ class DiscoveryOrchestrator:
                     import backend.app.models as app_models
                     # Update UI sheet counters
                     raw_sheet = db.get(app_models.RawLeadSheet, self.job_state["id"])
-                    if raw_sheet:
+                    if not raw_sheet:
+                        from backend.app.models import get_next_raw_sheet_number
+                        raw_sheet = app_models.RawLeadSheet(
+                            id=self.job_state["id"],
+                            workspace_id=self.job_state["workspace_id"],
+                            sheet_number=get_next_raw_sheet_number(db),
+                            name=f"{self.job_state.get('niche') or 'Leads'} - {self.job_state.get('state') or 'Area'}",
+                            niche=self.job_state.get("niche") or "General",
+                            country=self.job_state.get("country"),
+                            region=self.job_state.get("region"),
+                            state=self.job_state.get("state"),
+                            target_lead_count=self.metrics.requested,
+                            service=self.job_state.get("service"),
+                            status="RUNNING",
+                            sources=self.job_state.get("sources"),
+                            enrichments=self.job_state.get("enrichments"),
+                            leads_scraped=len(viable_candidates),
+                            discovered_count=self.metrics.fetched_count,
+                            valid_count=len(viable_candidates),
+                            progress_percent=self.job_state["progress_percent"],
+                            current_source=self.job_state["current_source"],
+                        )
+                        db.add(raw_sheet)
+                        db.flush()
+                    else:
                         raw_sheet.leads_scraped = len(viable_candidates)
                         raw_sheet.discovered_count = self.metrics.fetched_count
                         raw_sheet.valid_count = len(viable_candidates)
@@ -828,27 +856,9 @@ class DiscoveryOrchestrator:
         total = len(viable_candidates)
         target = self.metrics.requested
         enrichment_enabled = bool(self.job_state.get("enrichments"))
-
-        if not enrichment_enabled:
-            baseline_result = OverallVerificationResult(
-                decision="ACCEPT",
-                composite_confidence=0.5,
-                is_verified_entity=False,
-                has_verified_contact=True,
-            )
-            return [
-                {
-                    "rec": rec,
-                    "effective_website": rec.website,
-                    "effective_phone": rec.phone,
-                    "effective_email": rec.email,
-                    "discovered_socials": {},
-                    "discovered_whatsapp": [],
-                    "enr_res": None,
-                    "v_res": baseline_result,
-                }
-                for rec in viable_candidates
-            ]
+        # Email crawling is unconditional — runs whenever a website URL is available,
+        # regardless of whether optional enrichment services (scoring, verification) are enabled.
+        email_crawl_enabled = True
 
         self.job_state["current_source"] = f"Stage 2/4: Verifying contact signals (0/{total})..."
         
@@ -905,7 +915,7 @@ class DiscoveryOrchestrator:
                     logger.warning(f"[DiscoveryOrchestrator] Website discovery warning for '{rec.business_name}': {disc_err}")
 
             # Step 2b: Field-aware contact & social crawling (always crawl website if available)
-            if enrichment_enabled and has_website:
+            if email_crawl_enabled and has_website:
                 try:
                     enr_res = self.enricher.enrich_website(
                         target_url=effective_website,
@@ -916,13 +926,31 @@ class DiscoveryOrchestrator:
                     if enr_res and enr_res.contacts:
                         if enr_res.contacts.phones and not has_phone:
                             effective_phone = enr_res.contacts.phones[0].get("phone")
-                        if enr_res.contacts.emails and not has_email:
-                            effective_email = enr_res.contacts.emails[0].get("email")
-                        elif enr_res.contacts.emails and not effective_email:
+                        # Overwrite effective_email if:
+                        #  (a) no valid email was previously set, OR
+                        #  (b) the current value is a phone number that leaked into the email column
+                        _email_is_phone = bool(
+                            effective_email
+                            and _PHONE_IN_EMAIL_PATTERN.match(str(effective_email).strip())
+                        )
+                        if enr_res.contacts.emails and (not has_email or _email_is_phone or not effective_email):
                             effective_email = enr_res.contacts.emails[0].get("email")
                         discovered_whatsapp = enr_res.contacts.whatsapp_links or []
                     if enr_res and enr_res.social_profiles:
                         discovered_socials = enr_res.social_profiles
+                    # Facebook About fallback — only when website crawl found no email
+                    if enr_res and not enr_res.contacts.emails:
+                        fb_url = discovered_socials.get("facebook") or (
+                            rec.raw_data.get("facebook_url") if isinstance(rec.raw_data, dict) else None
+                        )
+                        if fb_url:
+                            try:
+                                fb_emails = self.enricher.scrape_facebook_about(fb_url)
+                                if fb_emails:
+                                    enr_res.contacts.emails = fb_emails
+                                    effective_email = fb_emails[0].get("email")
+                            except AttributeError:
+                                pass  # scrape_facebook_about not yet implemented (task 3.3)
                 except Exception as enrich_err:
                     logger.warning(f"[DiscoveryOrchestrator] Enrichment warning for '{rec.business_name}': {enrich_err}")
 
@@ -1147,11 +1175,6 @@ class DiscoveryOrchestrator:
             finally:
                 self._release_lock(lock_key)
 
-            if l_state == LifecycleState.DUPLICATE:
-                self.metrics.duplicate_count += 1
-                continue
-
-            # Persist Lead Entity
             db = SessionLocal()
             persisted_lead = db.scalar(
                 select(Lead).where(
@@ -1160,6 +1183,10 @@ class DiscoveryOrchestrator:
                     Lead.job_id == self.job_state["id"],
                 )
             )
+            if persisted_lead:
+                self.metrics.duplicate_count += 1
+                continue
+
             if not persisted_lead:
                 persisted_lead = Lead(
                     workspace_id=self.job_state["workspace_id"],
@@ -1405,6 +1432,12 @@ class DiscoveryOrchestrator:
                 job.status = self.job_state["status"]
                 job.completion_reason = self.job_state["completion_reason"]
                 job.error_message = self.job_state.get("error_message")
+                job.leads_scraped = self.job_state["leads_scraped"]
+                job.progress_percent = self.job_state["progress_percent"]
+                job.discovered_count = self.metrics.fetched_count
+                job.valid_count = self.metrics.validated_count
+                job.duplicate_count = self.metrics.duplicate_count
+                job.fetched_count = self.job_state["fetched_count"]
             
             db.commit()
 

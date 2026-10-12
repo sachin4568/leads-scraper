@@ -181,8 +181,7 @@ class OSMOverpassConnector(SourceConnector):
             recovery_timeout_seconds=recovery_timeout_seconds,
         )
         self.endpoint_url = endpoint_url or getattr(get_settings(), "overpass_api_url", "https://overpass-api.de/api/interpreter")
-        self.user_agent = user_agent
-        self.user_agent = "python-httpx/0.27.0"
+        self.user_agent = user_agent or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         self.seen_queries = set()
         
         # OSM-specific discovery metrics

@@ -1,0 +1,192 @@
+{
+  "pbtResults": {
+    "1. Write bug condition exploration test": {
+      "status": "passed",
+      "failingExample": "Path A: effective_email == '(905) 334-0732' — early-return block at lines 832-849 returns rec.email verbatim when enrichment_enabled=False (enrichments=[]). Path B: enr_res.contacts.emails == [] — _discover_internal_links returns [] for /our-story (no priority keyword in path), homepage-only crawl misses the email. Path C: hasattr(enricher, 'scrape_facebook_about') == False — method does not exist on ProductionWebsiteEnricher. Path D: HTTP 404 on POST /api/v1/scrape-jobs/00000000-0000-0000-0000-000000000001/re-enrich-emails — route not registered.",
+      "lastRunTimestamp": 1791007021620
+    },
+    "3.5 Verify bug condition exploration test now passes": {
+      "status": "passed",
+      "lastRunTimestamp": 1791008682021
+    }
+  },
+  "executionHistory": {
+    "1. Write bug condition exploration test": [
+      {
+        "executionId": "48d85573-5d1a-4bc7-84bd-e7a4b21f383a",
+        "chatSessionId": "sess_a59b986c-46af-4629-b551-1f2b841a675f",
+        "timestamp": 1790999787555
+      },
+      {
+        "executionId": "48d85573-5d1a-4bc7-84bd-e7a4b21f383a",
+        "chatSessionId": "sess_a59b986c-46af-4629-b551-1f2b841a675f",
+        "timestamp": 1790999797436
+      },
+      {
+        "executionId": "48d85573-5d1a-4bc7-84bd-e7a4b21f383a",
+        "chatSessionId": "sess_a59b986c-46af-4629-b551-1f2b841a675f",
+        "timestamp": 1791007034537
+      }
+    ],
+    "2. Write preservation property tests (BEFORE implementing fix)": [
+      {
+        "executionId": "48d85573-5d1a-4bc7-84bd-e7a4b21f383a",
+        "chatSessionId": "sess_a59b986c-46af-4629-b551-1f2b841a675f",
+        "timestamp": 1790999789454
+      },
+      {
+        "executionId": "48d85573-5d1a-4bc7-84bd-e7a4b21f383a",
+        "chatSessionId": "sess_a59b986c-46af-4629-b551-1f2b841a675f",
+        "timestamp": 1791007038031
+      },
+      {
+        "executionId": "48d85573-5d1a-4bc7-84bd-e7a4b21f383a",
+        "chatSessionId": "sess_a59b986c-46af-4629-b551-1f2b841a675f",
+        "timestamp": 1791007362886
+      }
+    ],
+    "3.1 Remove enrichment_enabled early-return gate and introduce email_crawl_enabled flag": [
+      {
+        "executionId": "48d85573-5d1a-4bc7-84bd-e7a4b21f383a",
+        "chatSessionId": "sess_a59b986c-46af-4629-b551-1f2b841a675f",
+        "timestamp": 1790999789573
+      },
+      {
+        "executionId": "48d85573-5d1a-4bc7-84bd-e7a4b21f383a",
+        "chatSessionId": "sess_a59b986c-46af-4629-b551-1f2b841a675f",
+        "timestamp": 1791007373174
+      },
+      {
+        "executionId": "48d85573-5d1a-4bc7-84bd-e7a4b21f383a",
+        "chatSessionId": "sess_a59b986c-46af-4629-b551-1f2b841a675f",
+        "timestamp": 1791007810041
+      }
+    ],
+    "3.2 Increase max_pages to 10 and add generic-link fallback in _discover_internal_links": [
+      {
+        "executionId": "48d85573-5d1a-4bc7-84bd-e7a4b21f383a",
+        "chatSessionId": "sess_a59b986c-46af-4629-b551-1f2b841a675f",
+        "timestamp": 1790999789685
+      },
+      {
+        "executionId": "48d85573-5d1a-4bc7-84bd-e7a4b21f383a",
+        "chatSessionId": "sess_a59b986c-46af-4629-b551-1f2b841a675f",
+        "timestamp": 1791007817321
+      },
+      {
+        "executionId": "48d85573-5d1a-4bc7-84bd-e7a4b21f383a",
+        "chatSessionId": "sess_a59b986c-46af-4629-b551-1f2b841a675f",
+        "timestamp": 1791008083243
+      }
+    ],
+    "3.3 Add scrape_facebook_about method to ProductionWebsiteEnricher": [
+      {
+        "executionId": "48d85573-5d1a-4bc7-84bd-e7a4b21f383a",
+        "chatSessionId": "sess_a59b986c-46af-4629-b551-1f2b841a675f",
+        "timestamp": 1790999789838
+      },
+      {
+        "executionId": "48d85573-5d1a-4bc7-84bd-e7a4b21f383a",
+        "chatSessionId": "sess_a59b986c-46af-4629-b551-1f2b841a675f",
+        "timestamp": 1791008090489
+      },
+      {
+        "executionId": "48d85573-5d1a-4bc7-84bd-e7a4b21f383a",
+        "chatSessionId": "sess_a59b986c-46af-4629-b551-1f2b841a675f",
+        "timestamp": 1791008140721
+      }
+    ],
+    "3.4 Add POST /scrape-jobs/{job_id}/re-enrich-emails endpoint": [
+      {
+        "executionId": "48d85573-5d1a-4bc7-84bd-e7a4b21f383a",
+        "chatSessionId": "sess_a59b986c-46af-4629-b551-1f2b841a675f",
+        "timestamp": 1790999789938
+      },
+      {
+        "executionId": "48d85573-5d1a-4bc7-84bd-e7a4b21f383a",
+        "chatSessionId": "sess_a59b986c-46af-4629-b551-1f2b841a675f",
+        "timestamp": 1791008144462
+      },
+      {
+        "executionId": "48d85573-5d1a-4bc7-84bd-e7a4b21f383a",
+        "chatSessionId": "sess_a59b986c-46af-4629-b551-1f2b841a675f",
+        "timestamp": 1791008245234
+      }
+    ],
+    "3.5 Verify bug condition exploration test now passes": [
+      {
+        "executionId": "48d85573-5d1a-4bc7-84bd-e7a4b21f383a",
+        "chatSessionId": "sess_a59b986c-46af-4629-b551-1f2b841a675f",
+        "timestamp": 1790999790008
+      },
+      {
+        "executionId": "48d85573-5d1a-4bc7-84bd-e7a4b21f383a",
+        "chatSessionId": "sess_a59b986c-46af-4629-b551-1f2b841a675f",
+        "timestamp": 1791008248735
+      },
+      {
+        "executionId": "48d85573-5d1a-4bc7-84bd-e7a4b21f383a",
+        "chatSessionId": "sess_a59b986c-46af-4629-b551-1f2b841a675f",
+        "timestamp": 1791008696918
+      }
+    ],
+    "3.6 Verify preservation tests still pass": [
+      {
+        "executionId": "48d85573-5d1a-4bc7-84bd-e7a4b21f383a",
+        "chatSessionId": "sess_a59b986c-46af-4629-b551-1f2b841a675f",
+        "timestamp": 1790999790080
+      },
+      {
+        "executionId": "48d85573-5d1a-4bc7-84bd-e7a4b21f383a",
+        "chatSessionId": "sess_a59b986c-46af-4629-b551-1f2b841a675f",
+        "timestamp": 1791008700430
+      },
+      {
+        "executionId": "48d85573-5d1a-4bc7-84bd-e7a4b21f383a",
+        "chatSessionId": "sess_a59b986c-46af-4629-b551-1f2b841a675f",
+        "timestamp": 1791008740643
+      }
+    ],
+    "4. Write unit tests for all four changes": [
+      {
+        "executionId": "48d85573-5d1a-4bc7-84bd-e7a4b21f383a",
+        "chatSessionId": "sess_a59b986c-46af-4629-b551-1f2b841a675f",
+        "timestamp": 1790999790159
+      },
+      {
+        "executionId": "48d85573-5d1a-4bc7-84bd-e7a4b21f383a",
+        "chatSessionId": "sess_a59b986c-46af-4629-b551-1f2b841a675f",
+        "timestamp": 1791008744443
+      },
+      {
+        "executionId": "48d85573-5d1a-4bc7-84bd-e7a4b21f383a",
+        "chatSessionId": "sess_a59b986c-46af-4629-b551-1f2b841a675f",
+        "timestamp": 1791009228355
+      }
+    ],
+    "5. Checkpoint — Ensure all tests pass": [
+      {
+        "executionId": "48d85573-5d1a-4bc7-84bd-e7a4b21f383a",
+        "chatSessionId": "sess_a59b986c-46af-4629-b551-1f2b841a675f",
+        "timestamp": 1790999790259
+      },
+      {
+        "executionId": "48d85573-5d1a-4bc7-84bd-e7a4b21f383a",
+        "chatSessionId": "sess_a59b986c-46af-4629-b551-1f2b841a675f",
+        "timestamp": 1791009232063
+      },
+      {
+        "executionId": "48d85573-5d1a-4bc7-84bd-e7a4b21f383a",
+        "chatSessionId": "sess_a59b986c-46af-4629-b551-1f2b841a675f",
+        "timestamp": 1791009495722
+      }
+    ],
+    "3. Fix email-enrichment-deep-scrape (four-part bugfix)": [
+      {
+        "executionId": "48d85573-5d1a-4bc7-84bd-e7a4b21f383a",
+        "chatSessionId": "sess_a59b986c-46af-4629-b551-1f2b841a675f",
+        "timestamp": 1791008740712
+      }
+    ]
+  }
+}
