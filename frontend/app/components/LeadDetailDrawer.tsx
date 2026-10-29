@@ -52,7 +52,6 @@ export function LeadDetailDrawer({ lead, service, onClose }: { lead: Lead; servi
 
           <Sec title="Contact Information">
             <Row label="Location" value={lead.location} />
-            {lead.contactPhone && <Row label="Phone" value={lead.contactPhone} highlight />}
             {lead.contactEmail && <Row label="Email" value={lead.contactEmail} highlight />}
             {lead.websiteUrl && <Row label="Website" value={lead.websiteUrl} isLink href={`https://${lead.websiteUrl}`} />}
           </Sec>
@@ -117,4 +116,3 @@ function Score({ label, value, color }: { label:string; value:string; color:stri
 }
 
 // TODO: Render enrichment_state and opportunities panels here
-

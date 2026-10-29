@@ -296,6 +296,7 @@ def execute_single_query_plan(db, job, plan) -> None:
 
         max_pages_per_query = 5
         empty_pages_count = 0
+        request_retry_count = 0
 
         while (
             pagination_state.get("page", 1) <= max_pages_per_query
@@ -360,6 +361,7 @@ def execute_single_query_plan(db, job, plan) -> None:
                 
                 if hasattr(connector, "record_success"):
                     connector.record_success()
+                request_retry_count = 0
             except Exception as src_err:
                 err_str = str(src_err).lower()
                 classification = "UNAVAILABLE_PROVIDER"
@@ -402,6 +404,16 @@ def execute_single_query_plan(db, job, plan) -> None:
                 )
                 db.add(exec_log)
                 db.commit()
+
+                if classification in {"TIMEOUT", "SERVER_ERROR", "UNAVAILABLE_PROVIDER"} and request_retry_count < 2:
+                    request_retry_count += 1
+                    retry_delay = min(2 ** (request_retry_count - 1), 2)
+                    logger.warning(
+                        f"[Retry] Retrying {src_name} page {page_num} "
+                        f"({request_retry_count}/2) after {retry_delay}s"
+                    )
+                    time.sleep(retry_delay)
+                    continue
 
                 # Automated Resilient Cascade: If primary provider failed, try osm_overpass fallback
                 if src_name != "osm_overpass":
@@ -478,7 +490,10 @@ def execute_single_query_plan(db, job, plan) -> None:
                     continue
                 seen_ids.add(rec_key)
 
-                from backend.app.orchestration.discovery_orchestrator import is_viable_candidate
+                from backend.app.orchestration.discovery_orchestrator import (
+                    _remove_phone_data,
+                    is_viable_candidate,
+                )
 
                 if not is_viable_candidate(rec):
                     records_rejected += 1
@@ -495,8 +510,8 @@ def execute_single_query_plan(db, job, plan) -> None:
                     city=job.state or job.region,
                     country=job.country or "United States",
                     website=rec.website,
-                    phone=rec.phone,
-                    raw_payload=rec.raw_data or {},
+                    phone=None,
+                    raw_payload=_remove_phone_data(rec.raw_data or {}),
                 )
 
                 lock_key = acquire_lead_lock(r, rec.business_name, rec.phone, rec.website)
@@ -504,6 +519,9 @@ def execute_single_query_plan(db, job, plan) -> None:
                     canonical_lead, obs, l_state = resolver.process_observation(db, raw_lead)
                 finally:
                     release_lead_lock(r, lock_key)
+
+                if canonical_lead:
+                    canonical_lead.canonical_phone = None
 
                 if l_state == LifecycleState.DUPLICATE:
                     job.duplicate_count += 1
@@ -622,7 +640,6 @@ def execute_single_query_plan(db, job, plan) -> None:
                     target_niche=job.niche,
                     address=rec.address,
                     city=job.state or job.region,
-                    target_location=location,
                     extra_phones=extra_ph,
                     extra_emails=extra_em,
                     extra_whatsapp_links=extra_wa,
@@ -640,13 +657,30 @@ def execute_single_query_plan(db, job, plan) -> None:
                     track_metric(job_id_str, f"rejected_{rej_reason_str}")
                     continue  # DO NOT PERSIST AS PRODUCTION LEAD; CONTINUE DISCOVERY
 
+                final_email = gate_res.verified_contacts.get("email") or effective_email
+                final_website = gate_res.verified_contacts.get("website") or effective_website
+                if final_email:
+                    from backend.app.enrichment.email_verifier import EmailVerifier
+
+                    email_result = EmailVerifier().verify(
+                        final_email,
+                        business_name=rec.business_name,
+                        website=final_website,
+                        require_business_domain=True,
+                        source_backed=True,
+                    )
+                    final_email = email_result.email if email_result.is_valid else None
+
+                if not final_email:
+                    records_rejected += 1
+                    job.failed_count += 1
+                    page_failed += 1
+                    track_metric(job_id_str, "rejected_missing_verified_email")
+                    continue
+
                 # ── Candidate Passed Quality Gate -> Promote to Production Lead ──
                 records_valid += 1
                 job.valid_count += 1
-
-                final_phone = gate_res.verified_contacts.get("phone") or effective_phone
-                final_email = gate_res.verified_contacts.get("email") or effective_email
-                final_website = gate_res.verified_contacts.get("website") or effective_website
 
                 existing_src = db.scalar(
                     select(SourceRecord).where(
@@ -657,8 +691,7 @@ def execute_single_query_plan(db, job, plan) -> None:
                 if existing_src:
                     lead = db.get(Lead, existing_src.lead_id)
                     if lead:
-                        if final_phone and not lead.phone:
-                            lead.phone = final_phone
+                        lead.phone = None
                         if final_email and not lead.email:
                             lead.email = final_email
                         if final_website and not lead.website:
@@ -669,7 +702,7 @@ def execute_single_query_plan(db, job, plan) -> None:
                         job_id=job.id,
                         business_name=rec.business_name,
                         website=final_website,
-                        phone=final_phone,
+                        phone=None,
                         email=final_email,
                         notes=f"Source: {rec.source} | Accepted: {', '.join(gate_res.acceptance_reasons)}",
                         raw_status="PERSISTED",
@@ -685,7 +718,7 @@ def execute_single_query_plan(db, job, plan) -> None:
                         lead_id=lead.id,
                         source=rec.source,
                         source_id=rec.source_id,
-                        raw_data=rec.raw_data,
+                        raw_data=_remove_phone_data(rec.raw_data or {}),
                     )
                     db.add(src_rec)
                     db.flush()
@@ -718,12 +751,12 @@ def execute_single_query_plan(db, job, plan) -> None:
                                 status="VERIFIED",
                                 confidence_score=gate_res.contactability_score,
                                 source="WEBSITE_ENRICHMENT",
-                                details={
+                                details=_remove_phone_data({
                                     "emails": enr_res.contacts.emails,
                                     "phones": enr_res.contacts.phones,
                                     "whatsapp_links": enr_res.contacts.whatsapp_links,
                                     "addresses": enr_res.contacts.addresses,
-                                },
+                                }),
                             )
 
                         # Record SEO Evidence
@@ -786,7 +819,7 @@ def execute_single_query_plan(db, job, plan) -> None:
                                     "canonical_lead_id": canonical_lead.id,
                                     "business_name": canonical_lead.business_name,
                                     "website": canonical_lead.canonical_domain,
-                                    "phone": canonical_lead.canonical_phone,
+                                    "phone": None,
                                     "email": canonical_lead.canonical_email,
                                     "country": canonical_lead.country or job.country or "United States",
                                     "region_state": canonical_lead.state or job.state or job.region,
@@ -845,7 +878,7 @@ def execute_single_query_plan(db, job, plan) -> None:
                                     "niche": job.niche,
                                     "location": location,
                                     "website_exists": bool(final_website),
-                                    "phone_exists": bool(final_phone),
+                                    "phone_exists": False,
                                 },
                             )
                             learning_agent.record_prediction(
@@ -874,7 +907,7 @@ def execute_single_query_plan(db, job, plan) -> None:
                         intel_report = LeadIntelligenceEngine.evaluate_lead(
                             business_name=rec.business_name,
                             website=final_website,
-                            phone=final_phone,
+                            phone=None,
                             email=final_email,
                             category=rec.category or job.niche,
                             genuineness_score=gate_res.identity_confidence,
@@ -1135,6 +1168,7 @@ def execute_scrape_job(self, job_id_str: str) -> None:
         if not job or job.status in ("COMPLETED", "PARTIAL", "CANCELLED", "STOPPED_SAVED"):
             return
         workspace_id = str(job.workspace_id)
+        target_lead_count = job.target_lead_count or 100
 
     try:
         with workspace_concurrency_guard(workspace_id):
@@ -1160,7 +1194,7 @@ def execute_scrape_job(self, job_id_str: str) -> None:
             orchestrator = DiscoveryOrchestrator(
                 job_id=job_id,
                 connectors=connectors,
-                max_request_budget=60,
+                max_request_budget=discovery_request_budget(target_lead_count),
             )
             orchestrator.run_discovery()
 
@@ -1217,6 +1251,11 @@ def execute_scrape_job(self, job_id_str: str) -> None:
         if self and hasattr(self, "request") and self.request and self.request.retries < self.max_retries:
             raise self.retry(exc=error, countdown=5 * (2**self.request.retries)) from error
     return
+
+
+def discovery_request_budget(target_lead_count: int) -> int:
+    """Allow additional provider searches for verified-email-only lead targets."""
+    return max(60, min(target_lead_count * 10, 1000))
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=5)

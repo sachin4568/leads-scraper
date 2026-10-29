@@ -89,7 +89,7 @@ export function LeadSheetDetailsModal({ sheet, isOpen, onClose }: LeadSheetDetai
             <div className="metric-stat-box">
               <span className="metric-label">Outreach Channels</span>
               <span style={{ fontSize: "0.85rem", fontWeight: "600", color: "var(--text-dark)" }}>
-                Email, Phone, WhatsApp, CRM
+                Email, WhatsApp, CRM
               </span>
             </div>
           </div>

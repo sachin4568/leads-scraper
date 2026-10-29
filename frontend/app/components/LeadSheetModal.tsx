@@ -14,10 +14,10 @@ const SC: Record<string,{bg:string;text:string}> = {
 /* columns vary by service */
 function getColumns(svc: ServiceType) {
   if (svc === 'website_dev') {
-    return ['Lead ID', 'Business Name', 'Niche', 'Email', 'Phone', 'Social Media', 'Business Maturity', 'Genuineness Probability', 'Contactability Score', 'Priority Rank'];
+    return ['Lead ID', 'Business Name', 'Niche', 'Email', 'Social Media', 'Business Maturity', 'Genuineness Probability', 'Contactability Score', 'Priority Rank'];
   }
   if (svc === 'seo') {
-    return ['Lead ID', 'Business Name', 'Niche', 'Website Link', 'SEO Score', 'Email', 'Phone', 'Social Media', 'Genuineness', 'Contactability Score', 'Priority Score'];
+    return ['Lead ID', 'Business Name', 'Niche', 'Website Link', 'SEO Score', 'Email', 'Social Media', 'Genuineness', 'Contactability Score', 'Priority Score'];
   }
   if (svc === 'smma') {
     return ['Lead ID', 'Business Name', 'Country & Region', 'Instagram', 'Facebook', 'Follower Count', 'Email', 'Business Maturity', 'Genuineness', 'Social Media Management Score'];
@@ -35,7 +35,6 @@ const linkStyle = { color: 'var(--blue)', fontSize: '12px', textDecoration: 'non
 const renderLeadCells = (lead: Lead, svc: ServiceType, idx: number) => {
   const niche = (lead as any).niche || 'Not available';
   const email = lead.contactEmail || (lead as any).email || 'Not available';
-  const phone = lead.contactPhone || (lead as any).phone || 'Not available';
   const social = lead.instagramHandle || lead.facebookHandle || 'Not available';
   const maturity = (lead as any).businessMaturity || 'Not available';
   const genuinenessProb = lead.genuineness !== undefined && lead.genuineness !== null ? `${lead.genuineness}%` : 'Not available';
@@ -59,7 +58,6 @@ const renderLeadCells = (lead: Lead, svc: ServiceType, idx: number) => {
         <td style={boldTdStyle}>{lead.businessName}</td>
         <td style={tdStyle}>{niche}</td>
         <td style={tdStyle}>{email}</td>
-        <td style={tdStyle}>{phone}</td>
         <td style={tdStyle}>{social}</td>
         <td style={tdStyle}>{maturity}</td>
         <td style={tdStyle}>{genuinenessProb}</td>
@@ -83,7 +81,6 @@ const renderLeadCells = (lead: Lead, svc: ServiceType, idx: number) => {
         </td>
         <td style={tdStyle}>{seoScore}/100</td>
         <td style={tdStyle}>{email}</td>
-        <td style={tdStyle}>{phone}</td>
         <td style={tdStyle}>{social}</td>
         <td style={tdStyle}>{lead.genuineness}%</td>
         <td style={tdStyle}>{contactability}</td>
@@ -145,21 +142,25 @@ export function LeadSheetModal({ sheet, onClose, initialFullScreen = false }: { 
   const [selected, setSelected] = useState<Lead|null>(null);
   const [isFullScreen, setIsFullScreen] = useState<boolean>(initialFullScreen);
 
-  const filtered = useMemo(() => sheet.leads.filter(l => {
+  const emailLeads = useMemo(
+    () => sheet.leads.filter(l => Boolean(l.contactEmail || (l as any).email)),
+    [sheet.leads]
+  );
+  const filtered = useMemo(() => emailLeads.filter(l => {
     const q = search.toLowerCase();
     const matchText = l.businessName.toLowerCase().includes(q) || l.location.toLowerCase().includes(q) || l.leadId.toLowerCase().includes(q);
     const matchStatus = statusFilter === 'all' || l.status === statusFilter;
     return matchText && matchStatus;
-  }), [sheet.leads, search, statusFilter]);
+  }), [emailLeads, search, statusFilter]);
 
   const cols = getColumns(sheet.service);
-  const total = sheet.leads.length;
-  const warm = sheet.leads.filter(l=>l.status==='warm').length;
-  const conv = sheet.leads.filter(l=>l.status==='converted').length;
+  const total = emailLeads.length;
+  const warm = emailLeads.filter(l=>l.status==='warm').length;
+  const conv = emailLeads.filter(l=>l.status==='converted').length;
 
   const exportCSV = () => {
-    const headers = ['Lead ID','Business','Location','Website','Email','Phone','Priority Score','Status'];
-    const rows = sheet.leads.map(l => [l.leadId, l.businessName, l.location, l.websiteUrl||'', l.contactEmail||(l as any).email||'', l.contactPhone||'', l.priorityScore, l.status]);
+    const headers = ['Lead ID','Business','Location','Website','Email','Priority Score','Status'];
+    const rows = emailLeads.map(l => [l.leadId, l.businessName, l.location, l.websiteUrl||'', l.contactEmail||(l as any).email||'', l.priorityScore, l.status]);
     const csv = [headers, ...rows].map(r => r.map(c => `"${c}"`).join(',')).join('\n');
     const blob = new Blob([csv], {type:'text/csv'});
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `${sheet.name}.csv`; a.click();

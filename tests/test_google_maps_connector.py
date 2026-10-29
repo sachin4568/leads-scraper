@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import pytest
 import respx
-from httpx import Response
+from httpx import HTTPStatusError, Response
 
-from backend.app.sources.google_maps import PLACES_TEXT_SEARCH_URL, GoogleMapsConnector
+from backend.app.sources.google_maps import (
+    PLACES_NEW_SEARCH_URL,
+    PLACES_TEXT_SEARCH_URL,
+    GoogleMapsConnector,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -49,6 +53,23 @@ def test_google_maps_connector_search_success() -> None:
 
 
 @respx.mock
+def test_google_maps_rate_limit_does_not_return_fabricated_records() -> None:
+    respx.post(PLACES_NEW_SEARCH_URL).mock(
+        return_value=Response(429, json={"error": {"message": "Quota exceeded"}})
+    )
+    legacy_route = respx.get(PLACES_TEXT_SEARCH_URL).mock(
+        return_value=Response(200, json={"results": []})
+    )
+    connector = GoogleMapsConnector(api_key="test-api-key")
+
+    with pytest.raises(ValueError, match="PROVIDER_UNAVAILABLE"):
+        connector.search_leads(query="Medical Spa", location="Fairbanks")
+
+    assert connector.failure_count == 1
+    assert not legacy_route.called
+
+
+@respx.mock
 def test_google_maps_connector_circuit_breaker_on_errors() -> None:
     connector = GoogleMapsConnector(failure_threshold=2)
     respx.get(PLACES_TEXT_SEARCH_URL).mock(
@@ -57,13 +78,13 @@ def test_google_maps_connector_circuit_breaker_on_errors() -> None:
 
     assert connector.is_circuit_open() is False
 
-    results1 = connector.search_leads(query="Clinics")
-    assert results1 == []
+    with pytest.raises(HTTPStatusError):
+        connector.search_leads(query="Clinics")
     assert connector.failure_count == 1
     assert connector.is_circuit_open() is False
 
-    results2 = connector.search_leads(query="Clinics")
-    assert results2 == []
+    with pytest.raises(HTTPStatusError):
+        connector.search_leads(query="Clinics")
     assert connector.failure_count == 2
     assert connector.is_circuit_open() is True
 

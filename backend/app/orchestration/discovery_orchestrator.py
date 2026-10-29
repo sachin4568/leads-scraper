@@ -26,7 +26,11 @@ from backend.app.enrichment.website_discovery import (
     VerificationDecision,
     ZeroBudgetDiscoveryEngine,
 )
-from backend.app.enrichment.website_enricher import ProductionWebsiteEnricher
+from backend.app.enrichment.website_enricher import (
+    DECISION_MAKER_PREFIXES,
+    GENERIC_EMAIL_PREFIXES,
+    ProductionWebsiteEnricher,
+)
 from backend.app.ingestion.canonical_location import CanonicalLocation, LocationValidationResult, LocationValidator
 from backend.app.ingestion.identity import normalize_business_name, normalize_domain, normalize_phone
 from backend.app.ingestion.ingestion import RawLead
@@ -34,7 +38,7 @@ from backend.app.ingestion.lifecycle import LifecycleResolver, LifecycleState
 from backend.app.ingestion.location_normalizer import LocationNormalizer, is_location_relevant
 from backend.app.intelligence.adaptive_discovery import AdaptiveDiscoveryEngine
 from backend.app.intelligence.lead_intelligence import LeadIntelligenceEngine
-from backend.app.intelligence.niche_relevance import NicheRelevanceGate
+from backend.app.intelligence.niche_relevance import NicheRelevanceGate, parse_selected_niches
 from backend.app.intelligence.quality_gate import QualityGateDecision, QualityGateEngine
 from backend.app.intelligence.query_expansion import QueryExpansionEngine
 from backend.app.models import EvidenceRecord, Lead, ScrapeJob, ScrapeJobExecutionLog, SourceRecord
@@ -46,10 +50,31 @@ from backend.app.verification import (
     VerificationAndEvidenceEngine,
     VerificationStatus,
 )
+from backend.app.intelligence.genuineness import GenuinenessAgent
+from backend.app.enrichment.email_verifier import EmailVerifier
 from backend.app.websockets import publish_job_progress
 from backend.app.worker_concurrency import _global_limiter
 
 logger = logging.getLogger(__name__)
+
+
+def _is_phone_field(key: object) -> bool:
+    normalized_key = re.sub(r"[^a-z0-9]", "", str(key).lower())
+    return normalized_key == "tel" or any(
+        field in normalized_key for field in ("phone", "telephone", "mobile", "fax")
+    )
+
+
+def _remove_phone_data(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _remove_phone_data(item)
+            for key, item in value.items()
+            if not _is_phone_field(key)
+        }
+    if isinstance(value, list):
+        return [_remove_phone_data(item) for item in value]
+    return value
 
 
 @dataclass
@@ -65,6 +90,7 @@ class DiscoveryAction:
     priority: int = 1
     geo_bbox: list[float] | None = None
     historical_score: float = 1.0
+    retry_count: int = 0
 
 
 @dataclass
@@ -82,6 +108,19 @@ class OrchestratorMetrics:
     failed_count: int = 0
     requests_executed: int = 0
     max_requests: int = 50
+    researched_count: int = 0
+    emails_extracted_count: int = 0
+    source_backed_count: int = 0
+    decision_maker_count: int = 0
+    named_professional_count: int = 0
+    generic_count: int = 0
+    emails_rejected_count: int = 0
+    timeouts_count: int = 0
+    retries_count: int = 0
+    batch_failures: int = 0
+    start_time: float = 0.0
+    elapsed_time: float = 0.0
+    qualified_yield: float = 0.0
     sources_attempted: set[str] = field(default_factory=set)
     sources_failed: set[str] = field(default_factory=set)
     sources_succeeded: set[str] = field(default_factory=set)
@@ -92,13 +131,12 @@ def is_viable_candidate(rec: Any) -> bool:
     """Minimum Viability Gate (Candidate Pre-Filter):
     A discovered candidate is viable only if:
     1. It has a non-empty, non-generic business name.
-    2. It has at least ONE actionable contact or locator signal:
+    2. It has an actionable digital signal to discover or verify an email:
        - Website URL
-       - Phone number
        - Email address
-       - Complete address (or street address > 3 chars)
-       - Raw tags containing contact/address data
-    Businesses with only a company name + niche and NO contact/location signals are eliminated immediately.
+       - Raw tags containing website or email data
+    Candidates lacking both website and email cannot yield a verified email and are eliminated immediately.
+    Phone numbers are not accepted or used in this pipeline.
     """
     if not rec:
         return False
@@ -108,28 +146,24 @@ def is_viable_candidate(rec: Any) -> bool:
     if str(b_name).strip().lower() in ("unknown business", "unknown", "n/a", "none"):
         return False
 
-    phone = getattr(rec, "phone", None)
     website = getattr(rec, "website", None)
     email = getattr(rec, "email", None)
-    address = getattr(rec, "address", None)
     raw_data = getattr(rec, "raw_data", None)
 
-    has_phone = bool(phone and str(phone).strip())
     has_website = bool(website and str(website).strip())
     has_email = bool(email and str(email).strip())
-    has_address = bool(address and str(address).strip() and len(str(address).strip()) > 3)
 
     has_raw_signal = False
     if isinstance(raw_data, dict):
         tags = raw_data.get("tags") or raw_data.get("properties") or {}
         if isinstance(tags, dict):
             if any(tags.get(k) for k in (
-                "contact:phone", "phone", "contact:website", "website", 
-                "contact:email", "email", "addr:street", "addr:city", "addr:housenumber"
+                "contact:website", "website", 
+                "contact:email", "email"
             )):
                 has_raw_signal = True
 
-    return has_phone or has_website or has_email or has_address or has_raw_signal
+    return has_website or has_email or has_raw_signal
 
 
 class DiscoveryOrchestrator:
@@ -139,19 +173,23 @@ class DiscoveryOrchestrator:
 
     def __init__(
         self,
-        job_id: str,
-        connectors: dict[str, SourceConnector],
+        job_id: str | uuid.UUID | None = None,
+        connectors: dict[str, SourceConnector] | None = None,
         max_request_budget: int = 60,
+        db: Any = None,
+        job: Any = None,
+        require_verified_email: bool | None = None,
+        **kwargs: Any,
     ) -> None:
         import uuid
+        if job_id is None and job is not None:
+            job_id = getattr(job, "id", None)
+        if job_id is None:
+            raise ValueError("DiscoveryOrchestrator requires job_id or job")
         self.job_id = uuid.UUID(str(job_id))
-        self.connectors = connectors
-        
-        with SessionLocal() as db:
-            from backend.app.models import ScrapeJob
-            job = db.scalar(select(ScrapeJob).where(ScrapeJob.id == self.job_id))
-            if not job:
-                raise ValueError(f"Job {self.job_id} not found")
+        self.connectors = connectors or {}
+
+        if job is not None and hasattr(job, "workspace_id"):
             self.job_state = {
                 "id": job.id,
                 "workspace_id": job.workspace_id,
@@ -170,32 +208,49 @@ class DiscoveryOrchestrator:
                 "valid_count": job.valid_count or 0,
                 "error_message": job.error_message,
             }
+        else:
+            with SessionLocal() as db_session:
+                from backend.app.models import ScrapeJob
+                j_obj = db_session.scalar(select(ScrapeJob).where(ScrapeJob.id == self.job_id))
+                if not j_obj:
+                    raise ValueError(f"Job {self.job_id} not found")
+                self.job_state = {
+                    "id": j_obj.id,
+                    "workspace_id": j_obj.workspace_id,
+                    "niche": j_obj.niche,
+                    "target_lead_count": j_obj.target_lead_count,
+                    "country": j_obj.country,
+                    "region": j_obj.region,
+                    "state": j_obj.state,
+                    "enrichments": j_obj.enrichments,
+                    "sources": j_obj.sources,
+                    "service": j_obj.service,
+                    "leads_scraped": j_obj.leads_scraped or 0,
+                    "progress_percent": j_obj.progress_percent or 0.0,
+                    "status": j_obj.status,
+                    "discovered_count": j_obj.discovered_count or 0,
+                    "valid_count": j_obj.valid_count or 0,
+                    "error_message": j_obj.error_message,
+                }
 
         self.redis = _global_limiter._redis_client
         self.resolver = LifecycleResolver()
         self.discovery_engine = ZeroBudgetDiscoveryEngine()
         self.enricher = ProductionWebsiteEnricher()
+        self.email_verifier = EmailVerifier()
+        self.genuineness_agent = GenuinenessAgent()
+
+        self.require_verified_email = require_verified_email if require_verified_email is not None else True
 
         target = self.job_state.get('target_lead_count') or 100
+        self.max_duration_seconds = float(kwargs.get("max_duration_seconds") or 1200.0)
         self.metrics = OrchestratorMetrics(
             requested=target,
             max_requests=max_request_budget,
         )
         self.seen_observation_keys: set[str] = set()
-        self.action_queue: list[DiscoveryAction] = []
-        self._initialize_provider_health()
-        
-        self.redis = _global_limiter._redis_client
-        self.resolver = LifecycleResolver()
-        self.discovery_engine = ZeroBudgetDiscoveryEngine()
-        self.enricher = ProductionWebsiteEnricher()
-
-        target = self.job_state.get('target_lead_count') or 100
-        self.metrics = OrchestratorMetrics(
-            requested=target,
-            max_requests=max_request_budget,
-        )
-        self.seen_observation_keys: set[str] = set()
+        self._executed_query_pages: set[tuple[str, str, str]] = set()
+        self._target_locations: list[str] = []
         self.action_queue: list[DiscoveryAction] = []
         self._initialize_provider_health()
 
@@ -307,8 +362,12 @@ class DiscoveryOrchestrator:
             primary_loc = self.job_state["state"] or self.job_state["region"] or self.job_state["country"]
             if primary_loc:
                 target_locations = [primary_loc]
+        self._target_locations = target_locations
 
         target_sources = list(self.job_state["sources"] or ["google_maps", "osm_overpass"])
+        for c_name in self.connectors.keys():
+            if c_name not in target_sources:
+                target_sources.append(c_name)
         if "osm_overpass" not in target_sources:
             target_sources.append("osm_overpass")
 
@@ -330,40 +389,45 @@ class DiscoveryOrchestrator:
                 src_score = AdaptiveDiscoveryEngine.get_source_score(db, src)
 
             for loc in target_locations:
-                search_plan = QueryExpansionEngine().expand_query(self.job_state["niche"], loc)
-                for item in search_plan:
-                    q_term = item["query"]
-                    q_reason = item.get("reason", "unknown")
+                for niche in parse_selected_niches(self.job_state.get("niche")):
+                    search_plan = QueryExpansionEngine().expand_query(niche, loc)
+                    for item in search_plan:
+                        q_term = item["query"]
+                        q_reason = item.get("reason", "unknown")
 
-                    # Validate category support if connector supports it
-                    if hasattr(connector, "supports_category"):
-                        if not connector.supports_category(q_term):
+                        # Validate category support if connector supports it
+                        if hasattr(connector, "supports_category"):
+                            if not connector.supports_category(q_term):
+                                continue
+
+                        query_key = (src, loc, q_term.lower())
+                        if any(a.provider == src and a.location == loc and a.query.lower() == q_term.lower() for a in actions):
                             continue
 
-                    with SessionLocal() as db:
-                        q_score = AdaptiveDiscoveryEngine.get_query_score(db, q_term)
-                    reason_lower = q_reason.lower()
-                    if "exact" in reason_lower:
-                        priority = 1
-                    elif "plural" in reason_lower or "singular" in reason_lower:
-                        priority = 2
-                    elif "synonym" in reason_lower or "service" in reason_lower:
-                        priority = 3
-                    else:
-                        priority = 4
+                        with SessionLocal() as db:
+                            q_score = AdaptiveDiscoveryEngine.get_query_score(db, q_term)
+                        reason_lower = q_reason.lower()
+                        if "exact" in reason_lower:
+                            priority = 1
+                        elif "plural" in reason_lower or "singular" in reason_lower:
+                            priority = 2
+                        elif "synonym" in reason_lower or "service" in reason_lower:
+                            priority = 3
+                        else:
+                            priority = 4
 
-                    actions.append(
-                        DiscoveryAction(
-                            provider=src,
-                            query=q_term,
-                            query_reason=q_reason,
-                            location=loc,
-                            page=1,
-                            pagination_state={},
-                            priority=priority,
-                            historical_score=(src_score * 1.5) + q_score,
+                        actions.append(
+                            DiscoveryAction(
+                                provider=src,
+                                query=q_term,
+                                query_reason=q_reason,
+                                location=loc,
+                                page=1,
+                                pagination_state={},
+                                priority=priority,
+                                historical_score=(src_score * 1.5) + q_score,
+                            )
                         )
-                    )
 
         # Group actions by provider and interleave round-robin across providers
         provider_actions: dict[str, list[DiscoveryAction]] = {}
@@ -419,6 +483,7 @@ class DiscoveryOrchestrator:
 
         self.metrics.sources_attempted.add(action.provider)
         self.metrics.requests_executed += 1
+        self._executed_query_pages.add((action.provider, action.location, action.query.lower()))
 
         loc_param = action.location
         if action.provider == "osm_overpass" and action.geo_bbox:
@@ -426,18 +491,27 @@ class DiscoveryOrchestrator:
             # OSM Overpass expects (south, west, north, east) -> (lat_min, lon_min, lat_max, lon_max)
             loc_param = f"{action.geo_bbox[0]},{action.geo_bbox[2]},{action.geo_bbox[1]},{action.geo_bbox[3]}"
 
+        pagination_state = action.pagination_state
+        cursor_before = pagination_state.get("next_page_token")
+        seen_page_tokens = pagination_state.setdefault("seen_page_tokens", set())
+        if cursor_before:
+            if cursor_before in seen_page_tokens:
+                logger.warning(
+                    f"[DiscoveryOrchestrator] Provider '{action.provider}' repeated a pagination cursor; stopping this query."
+                )
+                return []
+
         try:
             logger.warning(
                 f"[DiscoveryOrchestrator] Executing Action -> Provider='{action.provider}', Query='{action.query}', "
                 f"Page={action.page}, Location='{loc_param}'"
             )
-            print(f">>> EXECUTING {action.provider} with query {action.query}")
             search_kwargs = {
                 "query": action.query,
                 "location": loc_param,
                 "limit": min(50, self.metrics.requested - self.metrics.saved_count),
                 "page": action.page,
-                "pagination_state": action.pagination_state,
+                "pagination_state": pagination_state,
             }
             parameters = inspect.signature(connector.search_leads).parameters
             legacy_pagination = "pagination_state" not in parameters and not any(
@@ -447,21 +521,58 @@ class DiscoveryOrchestrator:
             if legacy_pagination:
                 search_kwargs.pop("pagination_state")
 
+            failure_count_before = getattr(connector, "failure_count", None)
             records = connector.search_leads(**search_kwargs)
+            failure_count_after = getattr(connector, "failure_count", None)
+            if (
+                not records
+                and isinstance(failure_count_before, int)
+                and isinstance(failure_count_after, int)
+                and failure_count_after > failure_count_before
+            ):
+                raise RuntimeError("Provider recorded a failed request")
+            if cursor_before:
+                seen_page_tokens.add(cursor_before)
 
             # Record success in health tracker
             p_health["status"] = "HEALTHY"
             p_health["consecutive_failures"] = 0
             p_health["total_successes"] += 1
             self.metrics.sources_succeeded.add(action.provider)
+            self.metrics.sources_failed.discard(action.provider)
+
+            # Record execution log on success for AdaptiveDiscoveryEngine
+            try:
+                with SessionLocal() as db_log:
+                    exec_log = ScrapeJobExecutionLog(
+                        job_id=self.job_state["id"],
+                        source=action.provider,
+                        query=f"{action.query} ({action.query_reason})",
+                        page=action.page,
+                        records_received=len(records or []),
+                        records_valid=0,
+                        records_rejected=0,
+                        new_count=0,
+                        updated_count=0,
+                        duplicate_count=0,
+                        failed_count=0,
+                    )
+                    db_log.add(exec_log)
+                    db_log.commit()
+            except Exception as log_err:
+                logger.debug(f"[DiscoveryOrchestrator] Note logging execution success: {log_err}")
 
             # Check if provider has next page token or more results
-            has_more = (
-                action.pagination_state.get("has_more", False)
-                or bool(action.pagination_state.get("next_page_token"))
-                or legacy_pagination
-            )
-            if has_more and len(records) > 0 and (self.metrics.saved_count < self.metrics.requested):
+            next_cursor = pagination_state.get("next_page_token")
+            has_more = pagination_state.get("has_more", False) or bool(next_cursor) or legacy_pagination
+            has_new_cursor = bool(next_cursor) and next_cursor not in seen_page_tokens
+            can_advance = has_new_cursor if next_cursor else len(records) > 0
+            if (
+                has_more
+                and can_advance
+                and action.page < 10
+                and self.metrics.saved_count < self.metrics.requested
+            ):
                 next_action = DiscoveryAction(
                     provider=action.provider,
                     query=action.query,
@@ -494,12 +605,28 @@ class DiscoveryOrchestrator:
                 logger.info(
                     f"[DiscoveryOrchestrator] Provider '{action.provider}' unconfigured/missing credentials. Evicted remaining actions and switching to other providers."
                 )
-            elif p_health["consecutive_failures"] >= 2:
-                p_health["status"] = "DEGRADED"
-                # Demote remaining actions of degraded provider to end of queue
-                degraded_actions = [a for a in self.action_queue if a.provider == action.provider]
-                other_actions = [a for a in self.action_queue if a.provider != action.provider]
-                self.action_queue = other_actions + degraded_actions
+            else:
+                if action.retry_count < 2:
+                    self.action_queue.append(
+                        DiscoveryAction(
+                            provider=action.provider,
+                            query=action.query,
+                            query_reason=action.query_reason,
+                            location=action.location,
+                            page=action.page,
+                            pagination_state=action.pagination_state,
+                            priority=action.priority,
+                            geo_bbox=action.geo_bbox,
+                            historical_score=action.historical_score,
+                            retry_count=action.retry_count + 1,
+                        )
+                    )
+                if p_health["consecutive_failures"] >= 2:
+                    p_health["status"] = "DEGRADED"
+                    # Demote remaining actions of degraded provider to end of queue
+                    degraded_actions = [a for a in self.action_queue if a.provider == action.provider]
+                    other_actions = [a for a in self.action_queue if a.provider != action.provider]
+                    self.action_queue = other_actions + degraded_actions
 
             # Log execution log
             exec_log = ScrapeJobExecutionLog(
@@ -522,15 +649,16 @@ class DiscoveryOrchestrator:
             
             return []
 
-    def stage_1_discover_viable_candidates(self) -> list[NormalizedLeadRecord]:
+    def stage_1_discover_viable_candidates(self, batch_limit: int | None = None) -> list[NormalizedLeadRecord]:
         """Stage 1: Multi-Source Candidate Discovery & Minimum Viability Filtering (Deficit Backfilling).
         Discovers candidate items into a buffer. Any junk leads (no contact signals) are discarded
         immediately without counting toward target N, and discovery continues backfilling until N viable
         candidate leads are secured or sources are exhausted.
         """
-        self._build_initial_action_queue()
+        if not self.action_queue:
+            self._build_initial_action_queue()
         viable_candidates: list[NormalizedLeadRecord] = []
-        target = self.metrics.requested
+        target = batch_limit if batch_limit is not None else self.metrics.requested
 
         # Resolve target canonical location scope
         req_scope_mode = "EXACT_CITY"
@@ -567,23 +695,32 @@ class DiscoveryOrchestrator:
                 "event_type": "STAGE_1_DISCOVERY_STARTED",
                 "job_id": str(self.job_state["id"]),
                 "status": self.job_state["status"],
-                "leads_scraped": 0,
+                "leads_scraped": self.metrics.saved_count,
                 "target_lead_count": target,
                 "progress_percent": 0.0,
-                "discovered": 0,
-                "valid": 0,
-                "duplicates": 0,
+                "discovered": self.metrics.fetched_count,
+                "valid": self.metrics.validated_count,
+                "duplicates": self.metrics.duplicate_count,
             },
         )
 
         while (
             len(viable_candidates) < target
             and self.metrics.requests_executed < self.metrics.max_requests
-            and len(self.action_queue) > 0
         ):
             if self._is_job_cancelled():
-                logger.info(f"[DiscoveryOrchestrator] Job {self.job_state["id"]} stopped/cancelled during Stage 1.")
+                logger.info(f"[DiscoveryOrchestrator] Job {self.job_state['id']} stopped/cancelled during Stage 1.")
                 return viable_candidates
+
+            if self.metrics.start_time > 0 and (time.time() - self.metrics.start_time) >= self.max_duration_seconds:
+                logger.info("[DiscoveryOrchestrator] SLA time budget reached during Stage 1.")
+                break
+
+            if not self.action_queue:
+                added = self._enqueue_expanded_actions()
+                if added == 0 or not self.action_queue:
+                    logger.info("[DiscoveryOrchestrator] No more discovery actions available in Stage 1.")
+                    break
 
             action = self.action_queue.pop(0)
 
@@ -720,14 +857,13 @@ class DiscoveryOrchestrator:
                 self.seen_observation_keys.add(rec_key)
 
                 viable_candidates.append(rec)
-                self.metrics.unique_count = len(viable_candidates)
-                self.metrics.validated_count = len(viable_candidates)
+                self.metrics.unique_count = len(self.seen_observation_keys)
                 self.job_state["discovered_count"] = self.metrics.fetched_count
-                self.job_state["valid_count"] = len(viable_candidates)
-                self.job_state["leads_scraped"] = len(viable_candidates)
-                self.job_state["current_source"] = f"Stage 1/4: Discovered {len(viable_candidates)}/{target} viable"[:64]
+                self.job_state["valid_count"] = self.metrics.validated_count
+                self.job_state["leads_scraped"] = self.metrics.saved_count
+                self.job_state["current_source"] = f"Stage 1/4: Discovered {len(viable_candidates)} viable candidates"[:64]
                 self.job_state["current_query"] = f"{action.query}"[:64]
-                self.job_state["progress_percent"] = min(40.0, round((len(viable_candidates) / target) * 40.0, 1))
+                self.job_state["progress_percent"] = min(30.0, round((self.metrics.saved_count / max(1, self.metrics.requested)) * 100.0, 1))
 
                 # Persist RawLead and atomically update last_progress_at on the ScrapeJob
                 with SessionLocal() as db:
@@ -765,29 +901,30 @@ class DiscoveryOrchestrator:
                         raw_sheet.progress_percent = self.job_state["progress_percent"]
                         raw_sheet.current_source = self.job_state["current_source"]
 
-                    # Check for duplicate RawLead
-                    existing_raw_lead = db.scalar(
-                        select(app_models.RawLead).where(
-                            app_models.RawLead.sheet_id == self.job_state["id"],
-                            app_models.RawLead.business_name == rec.business_name,
-                        )
-                    )
+                    # When require_verified_email is active, raw leads are persisted in Stage 4 only after email verification
                     r_lead = None
-                    if not existing_raw_lead:
-                        r_lead = app_models.RawLead(
-                            id=uuid.uuid4(),
-                            sheet_id=self.job_state["id"],
-                            lead_number=len(viable_candidates),
-                            business_name=rec.business_name,
-                            website=rec.website,
-                            email=rec.email,
-                            phone=rec.phone,
-                            location=f"{rec.city or ''}, {rec.state or rec.country or ''}".strip(", "),
-                            source=rec.source,
-                            notes=rec.address,
-                            raw_data=rec.raw_data or {},
+                    if not self.require_verified_email:
+                        existing_raw_lead = db.scalar(
+                            select(app_models.RawLead).where(
+                                app_models.RawLead.sheet_id == self.job_state["id"],
+                                app_models.RawLead.business_name == rec.business_name,
+                            )
                         )
-                        db.add(r_lead)
+                        if not existing_raw_lead:
+                            r_lead = app_models.RawLead(
+                                id=uuid.uuid4(),
+                                sheet_id=self.job_state["id"],
+                                lead_number=len(viable_candidates),
+                                business_name=rec.business_name,
+                                website=rec.website,
+                                email=None,
+                                phone=None,
+                                location=f"{rec.city or ''}, {rec.state or rec.country or ''}".strip(", "),
+                                source=rec.source,
+                                notes=rec.address,
+                                raw_data=_remove_phone_data(rec.raw_data or {}),
+                            )
+                            db.add(r_lead)
                         # Update progress in DB so the polling endpoint can return live data
                         from sqlalchemy import func
                         job = db.get(app_models.ScrapeJob, self.job_state["id"])
@@ -897,7 +1034,7 @@ class DiscoveryOrchestrator:
             has_website = bool(effective_website and str(effective_website).strip())
 
             # Step 2a: Zero-Budget Website Discovery if website is missing
-            if enrichment_enabled and not has_website:
+            if not has_website:
                 try:
                     raw_tags = rec.raw_data.get("tags") if isinstance(rec.raw_data, dict) else {}
                     verif_res = self.discovery_engine.discover_and_verify_official_website(
@@ -926,9 +1063,6 @@ class DiscoveryOrchestrator:
                     if enr_res and enr_res.contacts:
                         if enr_res.contacts.phones and not has_phone:
                             effective_phone = enr_res.contacts.phones[0].get("phone")
-                        # Overwrite effective_email if:
-                        #  (a) no valid email was previously set, OR
-                        #  (b) the current value is a phone number that leaked into the email column
                         _email_is_phone = bool(
                             effective_email
                             and _PHONE_IN_EMAIL_PATTERN.match(str(effective_email).strip())
@@ -950,9 +1084,165 @@ class DiscoveryOrchestrator:
                                     enr_res.contacts.emails = fb_emails
                                     effective_email = fb_emails[0].get("email")
                             except AttributeError:
-                                pass  # scrape_facebook_about not yet implemented (task 3.3)
+                                pass
                 except Exception as enrich_err:
                     logger.warning(f"[DiscoveryOrchestrator] Enrichment warning for '{rec.business_name}': {enrich_err}")
+
+            # Step 2b-verify: Prioritized Email Selection & Verification (Stage D)
+            self.metrics.researched_count += 1
+            selected_email_meta = None
+            selected_ev_res = None
+
+            if has_website:
+                candidates_map: dict[str, dict[str, Any]] = {}
+                # 1. Collect emails from enrich_website (already categorized with priority 1, 2, or 3)
+                if enr_res and enr_res.contacts and enr_res.contacts.emails:
+                    for em_item in enr_res.contacts.emails:
+                        em_str = (em_item.get("email") or "").strip()
+                        if (
+                            em_str
+                            and not _PHONE_IN_EMAIL_PATTERN.match(em_str)
+                            and not EmailVerifier.is_placeholder_email(em_str)
+                        ):
+                            prio = em_item.get("priority")
+                            if prio is None:
+                                c_type = em_item.get("type", "generic")
+                                prio = 1 if c_type == "decision_maker" else (2 if c_type == "named_professional" else 3)
+                            source_url = em_item.get("source_url") or effective_website
+                            candidates_map[em_str.lower()] = {
+                                "email": em_str,
+                                "type": em_item.get("type", "generic"),
+                                "priority": prio,
+                                "source_url": source_url,
+                                "name": em_item.get("name"),
+                                "role": em_item.get("role"),
+                                "source_backed": em_item.get(
+                                    "source_backed",
+                                    bool(source_url and str(source_url).startswith(("http://", "https://"))),
+                                ),
+                            }
+
+                # 2. Add provider email (rec.email / effective_email) if not already discovered
+                if effective_email and not _PHONE_IN_EMAIL_PATTERN.match(str(effective_email).strip()):
+                    eff_clean = str(effective_email).strip()
+                    if (
+                        eff_clean.lower() not in candidates_map
+                        and not EmailVerifier.is_placeholder_email(eff_clean)
+                    ):
+                        local_part = eff_clean.split("@")[0].lower() if "@" in eff_clean else ""
+                        if (
+                            any(local_part == p or local_part.startswith(p + ".") or local_part.startswith(p + "_") for p in GENERIC_EMAIL_PREFIXES)
+                            or local_part in DECISION_MAKER_PREFIXES
+                        ):
+                            prio = 3
+                            c_type = "generic"
+                        else:
+                            prio = 2
+                            c_type = "named_professional"
+                        candidates_map[eff_clean.lower()] = {
+                            "email": eff_clean,
+                            "type": c_type,
+                            "priority": prio,
+                            "source_url": effective_website or rec.source or "provider",
+                            "name": None,
+                            "role": None,
+                            "source_backed": bool(
+                                rec.email
+                                and eff_clean.lower() == str(rec.email).strip().lower()
+                                and rec.source
+                                and rec.source_id
+                            ),
+                        }
+
+                unique_candidates = list(candidates_map.values())
+                self.metrics.emails_extracted_count += len(unique_candidates)
+
+                # Sort strictly by priority: Priority 1 (Decision-maker) > Priority 2 (Named professional) > Priority 3 (Generic)
+                unique_candidates.sort(
+                    key=lambda candidate: (
+                        not candidate["source_backed"],
+                        candidate["priority"],
+                        0 if candidate["source_url"] == effective_website else 1,
+                    )
+                )
+
+                verified_email = None
+                verifier = getattr(self, "email_verifier", None) or EmailVerifier()
+                req_domain = getattr(self, "require_verified_email", False)
+
+                for cand in unique_candidates:
+                    ev_res = verifier.verify(
+                        cand["email"],
+                        business_name=rec.business_name,
+                        website=effective_website,
+                        require_business_domain=req_domain,
+                        source_backed=cand["source_backed"],
+                    )
+                    if ev_res.is_valid:
+                        verified_email = cand["email"]
+                        selected_email_meta = cand
+                        selected_ev_res = ev_res
+                        break
+                    else:
+                        self.metrics.emails_rejected_count += 1
+
+                if verified_email:
+                    effective_email = verified_email
+                    self.metrics.source_backed_count += 1
+                    if selected_email_meta["priority"] == 1:
+                        self.metrics.decision_maker_count += 1
+                    elif selected_email_meta["priority"] == 2:
+                        self.metrics.named_professional_count += 1
+                    else:
+                        self.metrics.generic_count += 1
+                elif getattr(self, "require_verified_email", False):
+                    effective_email = None
+                else:
+                    effective_email = None
+            else:
+                if effective_email and not _PHONE_IN_EMAIL_PATTERN.match(str(effective_email).strip()):
+                    self.metrics.emails_extracted_count += 1
+                    source_backed = bool(rec.email and rec.source and rec.source_id)
+                    verifier = getattr(self, "email_verifier", None) or EmailVerifier()
+                    email_verification = verifier.verify(
+                        str(effective_email).strip(),
+                        business_name=rec.business_name,
+                        require_business_domain=getattr(self, "require_verified_email", False),
+                        source_backed=source_backed,
+                    )
+                    if email_verification.is_valid:
+                        local_part = str(effective_email).split("@", 1)[0].lower()
+                        is_generic = (
+                            local_part in DECISION_MAKER_PREFIXES
+                            or any(
+                                local_part == prefix
+                                or local_part.startswith(f"{prefix}.")
+                                or local_part.startswith(f"{prefix}_")
+                                for prefix in GENERIC_EMAIL_PREFIXES
+                            )
+                        )
+                        contact_type = "generic" if is_generic else "named_professional"
+                        priority = 3 if is_generic else 2
+                        selected_email_meta = {
+                            "email": str(effective_email).strip(),
+                            "type": contact_type,
+                            "priority": priority,
+                            "source_url": rec.source or "provider",
+                            "name": None,
+                            "role": None,
+                            "source_backed": source_backed,
+                        }
+                        selected_ev_res = email_verification
+                        self.metrics.source_backed_count += 1
+                        if is_generic:
+                            self.metrics.generic_count += 1
+                        else:
+                            self.metrics.named_professional_count += 1
+                    else:
+                        self.metrics.emails_rejected_count += 1
+                        effective_email = None
+                elif effective_email:
+                    effective_email = None
 
             # Step 2c: Verification & Evidence Engine
             target_loc = self.job_state["state"] or self.job_state["region"] or self.job_state["country"]
@@ -984,44 +1274,49 @@ class DiscoveryOrchestrator:
                     has_verified_contact=bool(effective_phone or effective_email or effective_website),
                 )
 
+            # Record traceable email evidence if a selected email exists
+            if selected_email_meta and effective_email:
+                v_res.evidence_records.append({
+                    "field_name": "email",
+                    "status": getattr(selected_ev_res, "deliverability_status", "DELIVERABILITY_UNKNOWN") if selected_ev_res else "DELIVERABILITY_UNKNOWN",
+                    "confidence_score": 90 if selected_email_meta.get("priority") == 1 else (80 if selected_email_meta.get("priority") == 2 else 70),
+                    "source": selected_email_meta.get("source_url") or effective_website or rec.source,
+                    "details": {
+                        "email": effective_email,
+                        "type": selected_email_meta.get("type", "generic"),
+                        "priority": selected_email_meta.get("priority", 3),
+                        "source_url": selected_email_meta.get("source_url") or effective_website or rec.source,
+                        "name": selected_email_meta.get("name"),
+                        "role": selected_email_meta.get("role"),
+                        "validation_outcome": getattr(selected_ev_res, "deliverability_status", "DELIVERABILITY_UNKNOWN") if selected_ev_res else "DELIVERABILITY_UNKNOWN",
+                    },
+                })
+
             # Sanitize rejected fields
             if enrichment_enabled and v_res.field_results["website"].verification_status == VerificationStatus.REJECTED:
                 effective_website = None
-            if enrichment_enabled and v_res.field_results["phone"].verification_status == VerificationStatus.REJECTED:
-                effective_phone = None
+            effective_phone = None
             if enrichment_enabled and v_res.field_results["email"].verification_status == VerificationStatus.REJECTED:
                 effective_email = None
+
+            # Skip candidate if website has no verified original email after pagination
+            if not effective_email:
+                logger.info(
+                    f"[DiscoveryOrchestrator] Candidate '{rec.business_name}' has website with no verified email after pagination — skipping."
+                )
+                self.metrics.rejected_count += 1
+                continue
 
             verified_results.append({
                 "rec": rec,
                 "effective_website": effective_website,
-                "effective_phone": effective_phone,
+                "effective_phone": None,
                 "effective_email": effective_email,
                 "discovered_socials": discovered_socials,
                 "discovered_whatsapp": discovered_whatsapp,
                 "enr_res": enr_res,
                 "v_res": v_res,
             })
-
-            # Instantly persist discovered personal email to RawLead in database
-            if effective_email or effective_website:
-                try:
-                    with SessionLocal() as db_update:
-                        import backend.app.models as app_models
-                        rl = db_update.scalar(
-                            select(app_models.RawLead).where(
-                                app_models.RawLead.sheet_id == self.job_state["id"],
-                                app_models.RawLead.business_name == rec.business_name,
-                            )
-                        )
-                        if rl:
-                            if effective_email:
-                                rl.email = effective_email
-                            if effective_website:
-                                rl.website = effective_website
-                            db_update.commit()
-                except Exception as up_err:
-                    logger.debug(f"[DiscoveryOrchestrator] Immediate lead email update note: {up_err}")
 
         logger.info(f"[DiscoveryOrchestrator] Stage 2 Completed: Verified signals for {len(verified_results)} candidates.")
         return verified_results
@@ -1041,7 +1336,6 @@ class DiscoveryOrchestrator:
 
             rec = item["rec"]
             effective_website = item["effective_website"]
-            effective_phone = item["effective_phone"]
             effective_email = item["effective_email"]
             enr_res = item["enr_res"]
             v_res = item["v_res"]
@@ -1069,16 +1363,17 @@ class DiscoveryOrchestrator:
             # Quality Gate
             gate_res = QualityGateEngine.evaluate_candidate(
                 business_name=rec.business_name,
-                phone=effective_phone,
+                phone=None,
                 email=effective_email,
                 website=effective_website,
                 address=rec.address,
                 category=rec.category or self.job_state["niche"],
                 target_niche=self.job_state["niche"],
                 social_profiles=discovered_socials,
-                extra_phones=[p.get("phone") for p in (enr_res.contacts.phones if enr_res and enr_res.contacts else []) if p.get("phone")],
+                extra_phones=[],
                 extra_emails=[e.get("email") for e in (enr_res.contacts.emails if enr_res and enr_res.contacts else []) if e.get("email")],
                 extra_whatsapp_links=discovered_whatsapp,
+                require_verified_email=getattr(self, "require_verified_email", False),
             )
 
             if gate_res.decision == QualityGateDecision.ACCEPT:
@@ -1088,7 +1383,7 @@ class DiscoveryOrchestrator:
             intel_report = LeadIntelligenceEngine.evaluate_lead(
                 business_name=rec.business_name,
                 website=effective_website,
-                phone=effective_phone,
+                phone=None,
                 email=effective_email,
                 category=rec.category or self.job_state["niche"],
                 genuineness_score=v_res.composite_confidence,
@@ -1100,8 +1395,17 @@ class DiscoveryOrchestrator:
                 conflicts_evidence=enr_res.conflicts if enr_res else {},
             )
 
-            if intel_report.overall_opportunity_score >= 50:
+            if (
+                gate_res.decision == QualityGateDecision.ACCEPT
+                and intel_report.overall_opportunity_score >= 50
+            ):
                 self.metrics.qualified_count += 1
+
+            if gate_res.decision != QualityGateDecision.ACCEPT or not effective_email:
+                logger.info(
+                    f"[DiscoveryOrchestrator] Candidate '{rec.business_name}' failed quality gate ({gate_res.rejection_reason}) — skipping."
+                )
+                continue
 
             item["gate_res"] = gate_res
             item["intel_report"] = intel_report
@@ -1133,6 +1437,13 @@ class DiscoveryOrchestrator:
             gate_res = item["gate_res"]
             intel_report = item["intel_report"]
 
+            # Email-only enforcement: skip leads without verified emails when require_verified_email is active
+            if getattr(self, "require_verified_email", False) and not effective_email:
+                logger.info(
+                    f"[DiscoveryOrchestrator] Stage 4: Skipping '{rec.business_name}' — no verified email found."
+                )
+                continue
+
             # Resolve accurate canonical location
             c_norm = LocationValidator.normalize_country(self.job_state["country"])
             loc_resolved = LocationValidator.resolve_candidate_location(
@@ -1159,8 +1470,9 @@ class DiscoveryOrchestrator:
                 state=final_region,
                 country=final_country,
                 website=effective_website,
-                phone=effective_phone,
-                raw_payload=rec.raw_data or {},
+                email=effective_email,
+                phone=None,
+                raw_payload=_remove_phone_data(rec.raw_data or {}),
             )
 
             lock_key = self._acquire_lock(rec.business_name, effective_phone, effective_website)
@@ -1168,6 +1480,9 @@ class DiscoveryOrchestrator:
             try:
                 with SessionLocal() as db:
                     canonical_lead, obs, l_state = self.resolver.process_observation(db, raw_lead)
+                    if canonical_lead:
+                        canonical_lead.canonical_phone = None
+                        canonical_lead.canonical_email = effective_email
                     if canonical_lead and effective_website:
                         canonical_lead.canonical_domain = effective_website
                         canonical_lead.website_state = "VERIFIED"
@@ -1194,7 +1509,7 @@ class DiscoveryOrchestrator:
                     business_name=rec.business_name,
                     website=effective_website,
                     email=effective_email,
-                    phone=effective_phone,
+                    phone=None,
                     notes=final_address,
                     raw_status="PERSISTED",
                     verification_status="VERIFIED" if (gate_res.decision == QualityGateDecision.ACCEPT and v_res.decision == "ACCEPT") else "UNVERIFIED",
@@ -1206,7 +1521,7 @@ class DiscoveryOrchestrator:
             else:
                 persisted_lead.website = effective_website
                 persisted_lead.email = effective_email
-                persisted_lead.phone = effective_phone
+                persisted_lead.phone = None
                 persisted_lead.verification_status = "VERIFIED" if (gate_res.decision == QualityGateDecision.ACCEPT and v_res.decision == "ACCEPT") else "UNVERIFIED"
                 persisted_lead.genuineness_score = v_res.composite_confidence
 
@@ -1224,24 +1539,36 @@ class DiscoveryOrchestrator:
                     lead_id=persisted_lead.id,
                     source=rec.source,
                     source_id=src_id,
-                    raw_data=rec.raw_data or {},
+                    raw_data=_remove_phone_data(rec.raw_data or {}),
                 )
                 db.add(src_rec)
             else:
                 src_rec.lead_id = persisted_lead.id
                 if rec.raw_data:
-                    src_rec.raw_data = rec.raw_data
+                    src_rec.raw_data = _remove_phone_data(rec.raw_data)
 
             db.commit()
 
+            # AI Model Scoring: CatBoost + LightGBM Ensemble + PredictionLedger recording
+            try:
+                genuineness_decision = self.genuineness_agent.evaluate_lead_genuineness(db, persisted_lead)
+                logger.info(
+                    f"[DiscoveryOrchestrator] AI Genuineness: '{rec.business_name}' → "
+                    f"{genuineness_decision.decision} (score={genuineness_decision.overall_score:.2f})"
+                )
+            except Exception as gen_err:
+                logger.warning(f"[DiscoveryOrchestrator] GenuinenessAgent error for '{rec.business_name}': {gen_err}")
+
             # Upsert Evidence Records
             for ev_rec in v_res.evidence_records:
+                if ev_rec["field_name"] == "phone":
+                    continue
                 self._upsert_evidence(
                     field_name=ev_rec["field_name"],
                     status=ev_rec["status"],
                     confidence_score=ev_rec["confidence_score"],
                     source=ev_rec["source"],
-                    details=ev_rec["details"],
+                    details=_remove_phone_data(ev_rec["details"]),
                     lead_id=persisted_lead.id,
                     canonical_lead_id=canonical_lead_id,
                 )
@@ -1292,11 +1619,11 @@ class DiscoveryOrchestrator:
                         business_name=rec.business_name,
                         website=effective_website,
                         email=effective_email,
-                        phone=effective_phone,
+                        phone=None,
                         location=f"{final_city or ''}, {final_region or final_country or ''}".strip(", "),
                         source=rec.source,
                         notes=final_address,
-                        raw_data=rec.raw_data or {},
+                        raw_data=_remove_phone_data(rec.raw_data or {}),
                     )
                     db.add(r_lead)
                     db.commit()
@@ -1310,7 +1637,8 @@ class DiscoveryOrchestrator:
                 else:
                     existing_raw_lead.website = effective_website
                     existing_raw_lead.email = effective_email
-                    existing_raw_lead.phone = effective_phone
+                    existing_raw_lead.phone = None
+                    existing_raw_lead.raw_data = _remove_phone_data(rec.raw_data or {})
 
                     db.commit()
 
@@ -1346,25 +1674,136 @@ class DiscoveryOrchestrator:
         self.stage_4_persist_leads(qualified)
         return True
 
+    def _enqueue_expanded_actions(self) -> int:
+        """Enqueues additional unique search angles across all selected niches."""
+        niches = parse_selected_niches(self.job_state.get("niche"))
+        locations = self._target_locations or [
+            self.job_state.get("state")
+            or self.job_state.get("region")
+            or self.job_state.get("country")
+            or ""
+        ]
+        target_sources = list(self.job_state.get("sources") or ["google_maps", "osm_overpass"])
+        target_sources.extend(src for src in self.connectors if src not in target_sources)
+        if "osm_overpass" not in target_sources:
+            target_sources.append("osm_overpass")
+        added_actions = 0
+        expansion_engine = QueryExpansionEngine()
+
+        for src in target_sources:
+            connector = self.connectors.get(src)
+            if not connector:
+                continue
+            p_health = self.metrics.provider_health.get(src, {})
+            if p_health.get("status") in ("UNAVAILABLE_NO_CREDENTIALS", "UNAVAILABLE"):
+                continue
+            with SessionLocal() as db:
+                src_score = AdaptiveDiscoveryEngine.get_source_score(db, src)
+            for loc in locations:
+                for niche in niches:
+                    expanded_plan = expansion_engine.expand_query(niche, loc, max_queries=30)
+                    for item in expanded_plan:
+                        q_term = item["query"]
+                        if hasattr(connector, "supports_category") and not connector.supports_category(q_term):
+                            continue
+                        query_key = (src, loc, q_term.lower())
+                        if query_key in self._executed_query_pages:
+                            continue
+                        if any(a.provider == src and a.location == loc and a.query.lower() == q_term.lower() for a in self.action_queue):
+                            continue
+                        with SessionLocal() as db:
+                            q_score = AdaptiveDiscoveryEngine.get_query_score(db, q_term)
+                        self.action_queue.append(
+                            DiscoveryAction(
+                                provider=src,
+                                query=q_term,
+                                query_reason=item.get("reason", "backfill_expansion"),
+                                location=loc,
+                                page=1,
+                                pagination_state={},
+                                priority=3,
+                                historical_score=(src_score * 1.5) + q_score,
+                            )
+                        )
+                        added_actions += 1
+        return added_actions
+
     def run_discovery(self) -> None:
-        """Main staged orchestrator discovery pipeline.
-        Executes: Stage 1 (Discovery & Viability Filter) -> Stage 2 (Signal Verification) -> 
-        Stage 3 (ML Qualification) -> Stage 4 (Promotion & Persistence) -> Finalization.
+        """Main staged orchestrator discovery pipeline governed by 20-minute SLA time budget.
+        Executes controlled batches of:
+          Stage 1 (Discovery & Viability Filter) ->
+          Stage 2 (Signal Verification & Priority Email Discovery) ->
+          Stage 3 (ML Opportunity Qualification) ->
+          Stage 4 (Promotion & Database Persistence).
+
+        Continues discovery across batches, paginated sources, and expanded queries until:
+        - Requested qualified lead target is met (saved_count >= requested)
+        - 20-minute SLA time budget expires (elapsed >= max_duration_seconds)
+        - All sources and query expansions are exhausted
+        - Job is cancelled
         """
-        # Stage 1: Discover Viable Candidate Leads (with Deficit Backfilling)
-        viable_candidates = self.stage_1_discover_viable_candidates()
-        if not viable_candidates:
-            self.finalize_discovery()
-            return
+        if self.metrics.start_time == 0.0:
+            self.metrics.start_time = time.time()
 
-        # Stage 2: Contact Signal Enrichment & Verification
-        verified_candidates = self.stage_2_enrich_and_verify(viable_candidates)
+        if not self.action_queue:
+            self._build_initial_action_queue()
 
-        # Stage 3: Deterministic Quality Gating & ML Opportunity Qualification
-        qualified_candidates = self.stage_3_qualify_and_score(verified_candidates)
+        while (
+            self.metrics.saved_count < self.metrics.requested
+            and self.metrics.requests_executed < self.metrics.max_requests
+            and not self._is_job_cancelled()
+        ):
+            # 1. Check 20-minute SLA time budget
+            elapsed = time.time() - self.metrics.start_time
+            self.metrics.elapsed_time = elapsed
+            if elapsed >= self.max_duration_seconds:
+                logger.info(
+                    f"[DiscoveryOrchestrator] 20-minute SLA time budget reached ({elapsed:.1f}s >= {self.max_duration_seconds}s). "
+                    f"Stopping cleanly with {self.metrics.saved_count}/{self.metrics.requested} leads."
+                )
+                break
 
-        # Stage 4: Promotion, Canonical Resolution & Database Persistence
-        self.stage_4_persist_leads(qualified_candidates)
+            # 2. Check if action queue needs expansion
+            if not self.action_queue:
+                self._enqueue_expanded_actions()
+            if not self.action_queue:
+                logger.info("[DiscoveryOrchestrator] Discovery actions exhausted.")
+                break
+
+            # 3. Stage 1: Discover viable candidate batch
+            deficit = self.metrics.requested - self.metrics.saved_count
+            batch_limit = max(10, min(50, deficit * 3))
+            viable_batch = self.stage_1_discover_viable_candidates(batch_limit=batch_limit)
+
+            if not viable_batch:
+                if (
+                    self.metrics.requests_executed < self.metrics.max_requests
+                    and self.metrics.elapsed_time < self.max_duration_seconds
+                    and self.action_queue
+                ):
+                    continue
+                if (
+                    self.metrics.requests_executed < self.metrics.max_requests
+                    and self.metrics.elapsed_time < self.max_duration_seconds
+                ):
+                    continue
+                logger.info("[DiscoveryOrchestrator] No viable candidates remain within the active budget.")
+                break
+
+            # 4. Stage 2: Signal Verification & 3-Tier Priority Email Discovery
+            verified_batch = self.stage_2_enrich_and_verify(viable_batch)
+
+            # 5. Stage 3: ML Qualification & Opportunity Scoring
+            qualified_batch = self.stage_3_qualify_and_score(verified_batch)
+
+            # 6. Stage 4: Canonical Resolution & Lead Persistence
+            self.stage_4_persist_leads(qualified_batch)
+
+            # 7. Update progress metrics
+            self.metrics.elapsed_time = time.time() - self.metrics.start_time
+            self.metrics.qualified_yield = (
+                (self.metrics.qualified_count / max(1, self.metrics.researched_count)) * 100.0
+            )
 
         # Finalize
         self.finalize_discovery()
@@ -1385,15 +1824,35 @@ class DiscoveryOrchestrator:
         target = self.metrics.requested
         scraped = self.job_state["leads_scraped"]
 
+        if self.metrics.start_time > 0:
+            self.metrics.elapsed_time = time.time() - self.metrics.start_time
+        self.metrics.qualified_yield = (
+            (self.metrics.qualified_count / max(1, self.metrics.researched_count)) * 100.0
+        )
+
         has_provider_failures = len(self.metrics.sources_failed) > 0
         successful_sources = list(self.metrics.sources_succeeded)
+        time_budget_expired = (
+            self.metrics.elapsed_time >= self.max_duration_seconds
+            and scraped < target
+        )
+        request_budget_exhausted = (
+            self.metrics.requests_executed >= self.metrics.max_requests
+            and scraped < target
+        )
 
         if scraped >= target:
             self.job_state["status"] = "COMPLETED"
             self.job_state["completion_reason"] = "TARGET_REACHED"
         elif scraped == 0 and target > 0:
             self.job_state["status"] = "FAILED"
-            if has_provider_failures and not successful_sources:
+            if time_budget_expired:
+                self.job_state["completion_reason"] = "TIME_BUDGET_EXPIRED"
+                self.job_state["error_message"] = "20-minute SLA time budget expired before qualifying any leads."
+            elif request_budget_exhausted:
+                self.job_state["completion_reason"] = "REQUEST_BUDGET_EXHAUSTED"
+                self.job_state["error_message"] = "Discovery request budget expired before qualifying any leads."
+            elif has_provider_failures and not successful_sources:
                 self.job_state["completion_reason"] = "ALL_SOURCES_FAILED"
                 self.job_state["error_message"] = "All provider sources failed."
             else:
@@ -1401,7 +1860,11 @@ class DiscoveryOrchestrator:
                 self.job_state["error_message"] = "Discovery exhausted. No valid leads found."
         elif scraped < target:
             self.job_state["status"] = "PARTIAL"
-            if has_provider_failures:
+            if time_budget_expired:
+                self.job_state["completion_reason"] = "TIME_BUDGET_EXPIRED"
+            elif request_budget_exhausted:
+                self.job_state["completion_reason"] = "REQUEST_BUDGET_EXHAUSTED"
+            elif has_provider_failures:
                 self.job_state["completion_reason"] = "PARTIAL_SOURCE_FAILURE"
             else:
                 self.job_state["completion_reason"] = "DISCOVERY_EXHAUSTED"

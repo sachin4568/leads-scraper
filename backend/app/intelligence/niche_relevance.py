@@ -7,6 +7,16 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+
+def parse_selected_niches(target_niche: str | list[str] | None) -> list[str]:
+    """Split the comma-separated niche value used by the existing scrape-job API."""
+    if isinstance(target_niche, list):
+        values = target_niche
+    else:
+        values = re.split(r"[,;|\n]+", target_niche or "")
+    return list(dict.fromkeys(value.strip() for value in values if value.strip()))
+
+
 # Core synonyms taxonomy for common business niches
 NICHE_SYNONYMS_TAXONOMY: dict[str, set[str]] = {
     "plumber": {
@@ -139,20 +149,26 @@ class NicheRelevanceGate:
     """Evaluates whether a candidate business belongs to the requested target niche."""
 
     @classmethod
-    def get_synonym_family(cls, target_niche: str) -> set[str]:
-        """Returns normalized synonym set for the given niche."""
-        t_clean = target_niche.lower().strip()
-        
-        # 1. Exact lookup
+    def get_synonym_family(cls, target_niche: str | list[str]) -> set[str]:
+        """Returns all matching synonym families for one or more selected niches."""
+        targets = parse_selected_niches(target_niche)
+        if len(targets) > 1:
+            return set().union(*(cls.get_synonym_family(target) for target in targets))
+
+        t_clean = (targets[0] if targets else "").lower()
         if t_clean in NICHE_SYNONYMS_TAXONOMY:
             return NICHE_SYNONYMS_TAXONOMY[t_clean]
 
-        # 2. Substring / plural matching
-        for k, syns in NICHE_SYNONYMS_TAXONOMY.items():
-            if k in t_clean or t_clean in k:
-                return syns
+        # Include all matching taxonomy families rather than making dictionary order decisive.
+        matching_families = [
+            syns
+            for key, syns in NICHE_SYNONYMS_TAXONOMY.items()
+            if key in t_clean or t_clean in key
+        ]
+        if matching_families:
+            return set().union(*matching_families)
 
-        # 3. Dynamic tokenization & basic stemming fallback
+        # Dynamic tokenization & basic stemming fallback
         tokens = set(re.findall(r"\b[a-z]{3,}\b", t_clean))
         syns = set(tokens)
         syns.add(t_clean)
@@ -190,18 +206,39 @@ class NicheRelevanceGate:
         business_name: str | None,
         category: str | None,
         raw_data: dict[str, Any] | None,
-        target_niche: str,
+        target_niche: str | list[str],
         query_context: str | None = None,
     ) -> NicheRelevanceDecision:
         """Deterministically evaluates candidate niche relevance."""
-        if not target_niche or not str(target_niche).strip():
+        targets = parse_selected_niches(target_niche)
+        if not targets:
             return NicheRelevanceDecision(
                 is_relevant=True,
                 confidence_score=0.7,
                 matched_reason="DEFAULT_ACCEPT_NO_TARGET_NICHE",
-                target_niche=target_niche or "",
+                target_niche="",
             )
 
+        if len(targets) > 1:
+            decisions = [
+                cls.evaluate_candidate(
+                    business_name=business_name,
+                    category=category,
+                    raw_data=raw_data,
+                    target_niche=target,
+                    query_context=query_context,
+                )
+                for target in targets
+            ]
+            for decision in decisions:
+                if decision.is_relevant:
+                    decision.target_niche = ", ".join(targets)
+                    return decision
+            decision = max(decisions, key=lambda result: result.confidence_score)
+            decision.target_niche = ", ".join(targets)
+            return decision
+
+        target_niche = targets[0]
         name_str = (business_name or "").strip()
         cat_str = (category or "").strip()
         tags = (raw_data.get("tags") if isinstance(raw_data, dict) else {}) or {}
@@ -265,7 +302,7 @@ class NicheRelevanceGate:
         # 2c. Check raw OSM tags (e.g. craft=plumber, amenity=dentist, shop=bakery)
         for syn in synonym_family:
             syn_clean = syn.replace("_", " ")
-            for tag_clean, orig_val in zip(tags_clean, tag_values):
+            for tag_clean, orig_val in zip(tags_clean, tag_values, strict=True):
                 if re.search(r"\b" + re.escape(syn_clean) + r"\b", tag_clean):
                     return NicheRelevanceDecision(
                         is_relevant=True,
@@ -274,6 +311,32 @@ class NicheRelevanceGate:
                         target_niche=target_niche,
                         detected_category=orig_val,
                     )
+
+        # 2d. Check query context:
+        # If candidate was retrieved by a search query explicitly targeting the niche,
+        # and has no explicit category contradictory to the niche:
+        if query_context:
+            query_clean = query_context.lower().replace("_", " ")
+            for syn in synonym_family:
+                syn_clean = syn.replace("_", " ")
+                if re.search(r"\b" + re.escape(syn_clean) + r"\b", query_clean):
+                    has_contrary_category = False
+                    if cat_clean:
+                        has_contrary_category = True
+                    elif types_clean:
+                        for other_niche, other_syns in NICHE_SYNONYMS_TAXONOMY.items():
+                            if other_niche != target_niche.lower().strip() and other_syns != synonym_family:
+                                if any(re.search(r"\b" + re.escape(osyn.replace("_", " ")) + r"\b", types_clean) for osyn in other_syns):
+                                    has_contrary_category = True
+                                    break
+                    if not has_contrary_category:
+                        return NicheRelevanceDecision(
+                            is_relevant=True,
+                            confidence_score=0.85,
+                            matched_reason=f"QUERY_CONTEXT_MATCH ({syn})",
+                            target_niche=target_niche,
+                            detected_category=syn,
+                        )
 
         # 3. Fallback: No positive niche signals matched
         logger.info(f"[NicheRelevance] Candidate '{name_str}' failed niche relevance for '{target_niche}'.")

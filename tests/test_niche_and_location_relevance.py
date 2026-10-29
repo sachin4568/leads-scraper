@@ -1,9 +1,10 @@
 import uuid
 import pytest
 from sqlalchemy import select
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from backend.app.database import SessionLocal
+from backend.app.enrichment.email_verifier import EmailVerificationResult
 from backend.app.models import Workspace, ScrapeJob, Lead
 from backend.app.sources.base import NormalizedLeadRecord
 from backend.app.orchestration.discovery_orchestrator import DiscoveryOrchestrator
@@ -133,6 +134,28 @@ def test_niche_relevance_gate_accepts_valid_plumbers():
         assert decision.confidence_score >= 0.85
 
 
+def test_niche_relevance_gate_checks_every_selected_niche_and_family():
+    plumbing_decision = NicheRelevanceGate.evaluate_candidate(
+        business_name="Northside Plumbing",
+        category="Plumbing Contractor",
+        raw_data={},
+        target_niche="Car Mechanics, Plumbing",
+        query_context="Plumbing businesses in Toronto",
+    )
+    dental_decision = NicheRelevanceGate.evaluate_candidate(
+        business_name="Central Dental Studio",
+        category="Dentist",
+        raw_data={},
+        target_niche="Plumbing, Dentist",
+        query_context="Dentist in Toronto",
+    )
+
+    assert plumbing_decision.is_relevant
+    assert plumbing_decision.matched_reason.startswith("EXACT_CATEGORY_MATCH")
+    assert dental_decision.is_relevant
+    assert dental_decision.target_niche == "Plumbing, Dentist"
+
+
 def test_location_normalizer_and_relevance_gate():
     """Tests location parsing and cross-country relevance protection."""
     # 1. Canada location parsing
@@ -229,6 +252,7 @@ def test_orchestrator_integrates_niche_and_location_gates(clean_db):
             category="Plumber",
             phone=f"+1416555{uuid.uuid4().hex[:4]}",
             website=f"https://metroplumbingtoronto_{uuid.uuid4().hex[:4]}.com",
+            email=f"info@metroplumbingtoronto_{uuid.uuid4().hex[:4]}.com",
             address="100 Queen St, Toronto, ON, Canada",
             raw_data={"types": ["plumber"]},
         ),
@@ -243,6 +267,7 @@ def test_orchestrator_integrates_niche_and_location_gates(clean_db):
             category="Plumber",
             phone=f"+1416555{uuid.uuid4().hex[:4]}",
             website=f"https://ontarioplumbingco_{uuid.uuid4().hex[:4]}.ca",
+            email=f"info@ontarioplumbingco_{uuid.uuid4().hex[:4]}.ca",
             address="200 Bay St, Toronto, ON, Canada",
             raw_data={"types": ["plumber"]},
         ),
@@ -259,7 +284,13 @@ def test_orchestrator_integrates_niche_and_location_gates(clean_db):
         max_request_budget=10,
     )
 
-    orchestrator.run_discovery()
+    with patch(
+        "backend.app.orchestration.discovery_orchestrator.EmailVerifier.verify",
+        side_effect=lambda email, **kwargs: EmailVerificationResult(
+            is_valid=True, email=email
+        ),
+    ):
+        orchestrator.run_discovery()
 
     clean_db.refresh(job)
     assert job.status == "COMPLETED"

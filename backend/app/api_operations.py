@@ -97,44 +97,7 @@ def build_execution_links(
     """Generates direct, zero-friction click-to-execute links for sales operators."""
     links: list[ExecutionLink] = []
 
-    # 1. Phone Call link
-    if phone:
-        cleaned_phone = clean_phone_number(phone)
-        links.append(
-            ExecutionLink(
-                channel="PHONE",
-                label=f"Call {phone}",
-                url=f"tel:{cleaned_phone}",
-                is_direct=True,
-            )
-        )
-
-    # 2. WhatsApp Direct link
-    wh_links = contacts_details.get("whatsapp_links", [])
-    if wh_links:
-        links.append(
-            ExecutionLink(
-                channel="WHATSAPP",
-                label="Chat on WhatsApp",
-                url=wh_links[0],
-                is_direct=True,
-            )
-        )
-    elif phone:
-        digits = "".join(filter(str.isdigit, phone))
-        encoded_msg = urllib.parse.quote(
-            f"Hi {business_name}, I noticed an opportunity to modernize your web presence and improve customer engagement. Would you be open to a quick chat?"
-        )
-        links.append(
-            ExecutionLink(
-                channel="WHATSAPP",
-                label=f"WhatsApp {phone}",
-                url=f"https://wa.me/{digits}?text={encoded_msg}",
-                is_direct=True,
-            )
-        )
-
-    # 3. Mailto Email link with pre-filled subject and body
+    # 1. Mailto Email link with pre-filled subject and body
     if email:
         subject = urllib.parse.quote(f"Digital presence optimization for {business_name}")
         body = urllib.parse.quote(
@@ -193,7 +156,7 @@ def build_unified_timeline(
             description=f"Identified {lead.business_name} under category '{getattr(lead, 'niche', None) or 'Business'}'.",
             timestamp=lead.created_at,
             source="OSM_OVERPASS",
-            metadata={"phone": lead.phone, "email": lead.email, "niche": getattr(lead, "niche", None)},
+            metadata={"phone": None, "email": lead.email, "niche": getattr(lead, "niche", None)},
         )
     )
 
@@ -317,26 +280,19 @@ def derive_recommended_channel(
     social_details: dict[str, Any],
 ) -> RecommendedChannelInfo:
     """Deterministically derives the most effective outreach channel based on available contactability."""
-    wh_links = contacts_details.get("whatsapp_links", [])
-    if wh_links:
-        return RecommendedChannelInfo(
-            channel="WHATSAPP",
-            value=wh_links[0],
-            label="WhatsApp Direct",
-        )
-    
     if email:
         return RecommendedChannelInfo(
             channel="EMAIL",
             value=email,
             label="Email Outreach",
         )
-    
-    if phone:
+
+    wh_links = contacts_details.get("whatsapp_links", [])
+    if wh_links:
         return RecommendedChannelInfo(
-            channel="PHONE",
-            value=phone,
-            label="Phone Call",
+            channel="WHATSAPP",
+            value=wh_links[0],
+            label="WhatsApp Direct",
         )
     
     profiles = social_details.get("profiles", {})
@@ -444,6 +400,8 @@ def list_operations_leads(
     stmt = select(Lead).where(
         Lead.workspace_id == workspace_id,
         Lead.deleted_at.is_(None),
+        Lead.email.is_not(None),
+        Lead.email != "",
     )
 
     # 2. Basic SQL Filters
@@ -470,7 +428,6 @@ def list_operations_leads(
         stmt = stmt.where(
             or_(
                 Lead.business_name.ilike(term),
-                Lead.phone.ilike(term),
                 Lead.email.ilike(term),
                 Lead.website.ilike(term),
             )
@@ -623,7 +580,7 @@ def list_operations_leads(
             continue
 
         rec_channel = derive_recommended_channel(
-            phone=lead.phone,
+            phone=None,
             email=lead.email,
             contacts_details=contacts_details,
             social_details=social_details,
@@ -642,7 +599,7 @@ def list_operations_leads(
 
         exec_links = build_execution_links(
             business_name=lead.business_name,
-            phone=lead.phone,
+            phone=None,
             email=lead.email,
             website=lead.website,
             contacts_details=contacts_details,
@@ -657,7 +614,7 @@ def list_operations_leads(
             "business_name": lead.business_name,
             "category": getattr(lead, "niche", None) or "Business",
             "location": None,
-            "phone": lead.phone,
+            "phone": None,
             "email": lead.email,
             "website": lead.website,
             "website_status": w_status,
@@ -817,7 +774,7 @@ def get_operations_lead_detail(
         rec_score = float(intel_details.get("digital_presence_gap_score", 60.0))
 
     rec_channel = derive_recommended_channel(
-        phone=lead.phone,
+        phone=None,
         email=lead.email,
         contacts_details=contacts_details,
         social_details=social_details,
@@ -833,7 +790,7 @@ def get_operations_lead_detail(
 
     exec_links = build_execution_links(
         business_name=lead.business_name,
-        phone=lead.phone,
+        phone=None,
         email=lead.email,
         website=lead.website,
         contacts_details=contacts_details,
@@ -849,7 +806,7 @@ def get_operations_lead_detail(
         business_name=lead.business_name,
         category=getattr(lead, "niche", None) or "Business",
         location=None,
-        phone=lead.phone,
+        phone=None,
         email=lead.email,
         website=lead.website,
         website_status=w_status,
@@ -872,10 +829,10 @@ def get_operations_lead_detail(
         last_enriched_at=intel_ev.created_at if intel_ev else lead.updated_at,
         created_at=lead.created_at,
         contactability={
-            "phone": lead.phone,
+            "phone": None,
             "email": lead.email,
             "whatsapp_links": wh_links,
-            "website_phones": contacts_details.get("phones", []),
+            "website_phones": [],
             "website_emails": contacts_details.get("emails", []),
             "addresses": contacts_details.get("addresses", []),
             "contactability_score": intel_details.get("contactability_score", 0),
@@ -1349,7 +1306,7 @@ def update_lead_workflow_status(
         business_name=lead.business_name,
         category=getattr(lead, "niche", None) or "Business",
         location=None,
-        phone=lead.phone,
+        phone=None,
         email=lead.email,
         website=lead.website,
         website_status="HAS_WEBSITE" if lead.website else "NO_WEBSITE",
@@ -1452,9 +1409,9 @@ def get_outreach_dashboard_metrics(
     channels_breakdown = {
         "whatsapp": 0,
         "email": sum(1 for l in leads if l.email),
-        "phone": sum(1 for l in leads if l.phone),
+        "phone": 0,
         "social": 0,
-        "none": sum(1 for l in leads if not l.phone and not l.email),
+        "none": sum(1 for l in leads if not l.email),
     }
 
     recent_actions_raw = db.scalars(

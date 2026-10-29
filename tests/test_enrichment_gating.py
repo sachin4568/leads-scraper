@@ -7,6 +7,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from backend.app.database import Base
+from backend.app.enrichment.email_verifier import EmailVerificationResult, EmailVerifier
 from backend.app.models import Workspace, ScrapeJob, Lead, SourceRecord, PredictionLedger, FeatureSnapshot
 from backend.app.models_services import ServiceOpportunity
 from backend.app.models_phase2 import Base as Phase2Base, CanonicalLead, LeadObservation
@@ -27,6 +28,15 @@ def test_db():
     session.refresh(ws)
     yield session, ws
     session.close()
+
+
+@pytest.fixture(autouse=True)
+def valid_email_verification(monkeypatch):
+    monkeypatch.setattr(
+        EmailVerifier,
+        "verify",
+        lambda self, email, **kwargs: EmailVerificationResult(is_valid=True, email=email),
+    )
 
 
 def test_enrichment_off_skips_optional_ml_and_classification(test_db):
@@ -57,7 +67,12 @@ def test_enrichment_off_skips_optional_ml_and_classification(test_db):
             address="Goregaon, Mumbai",
             phone=f"+91 98200000{i:02d}",
             website=f"https://offcafe{i}.com",
-            raw_data={"lat": 19.16 + (i * 0.001), "lon": 72.85 + (i * 0.001)},
+            email=f"contact@offcafe{i}.com",
+            raw_data={
+                "lat": 19.16 + (i * 0.001),
+                "lon": 72.85 + (i * 0.001),
+                "nationalPhoneNumber": f"+91 98200000{i:02d}",
+            },
         )
         for i in range(3)
     ]
@@ -82,9 +97,18 @@ def test_enrichment_off_skips_optional_ml_and_classification(test_db):
 
     # Core discovery verifications
     assert job.leads_scraped == 3
-    assert job.status in ("COMPLETED", "REGION_EXHAUSTED")
+    assert job.status in ("COMPLETED", "REGION_EXHAUSTED", "PARTIAL")
     persisted_leads = session.scalars(select(Lead).where(Lead.job_id == job.id)).all()
     assert len(persisted_leads) == 3
+    assert all(lead.phone is None for lead in persisted_leads)
+    assert all(
+        record.raw_data.get("nationalPhoneNumber") is None
+        for record in session.scalars(select(SourceRecord)).all()
+    )
+    assert all(
+        canonical.canonical_phone is None
+        for canonical in session.scalars(select(CanonicalLead)).all()
+    )
 
     # Verification that optional ML and classification were skipped
     assert mock_gen.call_count == 0
@@ -125,6 +149,7 @@ def test_enrichment_on_invokes_processing(test_db):
             address="Goregaon, Mumbai",
             phone="+91 9820000099",
             website="https://enrichedcafe1.com",
+            email="contact@enrichedcafe1.com",
             raw_data={"lat": 19.16, "lon": 72.85},
         )
     ]
@@ -147,6 +172,7 @@ def test_enrichment_on_invokes_processing(test_db):
     assert job.leads_scraped == 1
     persisted_leads = session.scalars(select(Lead).where(Lead.job_id == job.id)).all()
     assert len(persisted_leads) == 1
+    assert persisted_leads[0].phone is None
 
     # Optional records should be created
     service_opps = session.scalars(select(ServiceOpportunity)).all()
@@ -183,6 +209,7 @@ def test_failure_isolation_enrichment_error_preserves_lead(test_db):
             address="Goregaon, Mumbai",
             phone="+91 9820000077",
             website="https://errorcafe1.com",
+            email="contact@errorcafe1.com",
             raw_data={"lat": 19.16, "lon": 72.85},
         )
     ]
@@ -240,6 +267,7 @@ def test_legacy_job_without_enrichments_field(test_db):
             address="Goregaon, Mumbai",
             phone="+91 9820000055",
             website="https://legacycafe1.com",
+            email="contact@legacycafe1.com",
             raw_data={"lat": 19.16, "lon": 72.85},
         )
     ]

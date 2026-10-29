@@ -116,8 +116,7 @@ class DataAxleConnector(SourceConnector):
                 records = [self.parse_data_axle_record(biz) for biz in documents]
                 if pagination_state is not None:
                     pagination_state["results_returned"] = pagination_state.get("results_returned", 0) + len(records)
-                    if len(records) < page_size:
-                        pagination_state["has_more"] = False
+                    pagination_state["has_more"] = len(records) >= page_size
                 return records
         except Exception as error:
             self.record_failure()

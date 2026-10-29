@@ -33,7 +33,12 @@ def _get_db_master_leads() -> list[dict[str, Any]]:
 
     try:
         with SessionLocal() as session:
-            canonical_records = session.scalars(select(CanonicalLead)).all()
+            canonical_records = session.scalars(
+                select(CanonicalLead).where(
+                    CanonicalLead.canonical_email.is_not(None),
+                    CanonicalLead.canonical_email != "",
+                )
+            ).all()
             if not canonical_records:
                 return []
 
@@ -72,7 +77,7 @@ def _get_db_master_leads() -> list[dict[str, Any]]:
                         "business_type": c.business_maturity or "SMALL_BUSINESS",
                         "website": c.canonical_domain,
                         "email": c.canonical_email,
-                        "phone": c.canonical_phone,
+                        "phone": None,
                         "instagram": None,
                         "facebook": None,
                         "other_social_links": [],
@@ -277,7 +282,7 @@ def get_lead_intelligence(lead_id: str) -> dict[str, Any]:
         },
         "contact_info": {
             "email": found.get("email"),
-            "phone": found.get("phone"),
+            "phone": None,
             "contact_hierarchy": found.get("contact_hierarchy"),
             "contactability_score": found.get("contactability_score"),
         },
@@ -398,7 +403,6 @@ def export_leads_file(export_type: str) -> Response:
             "website",
             "website_available",
             "email",
-            "phone",
             "instagram",
             "facebook",
             "google_rating",
@@ -659,7 +663,13 @@ def public_get_job_leads(job_id: str) -> list[dict[str, Any]]:
 
     with SessionLocal() as session:
         raw_leads = session.scalars(
-            select(RawLead).where(RawLead.sheet_id == j_uuid).order_by(RawLead.created_at.asc())
+            select(RawLead)
+            .where(
+                RawLead.sheet_id == j_uuid,
+                RawLead.email.is_not(None),
+                RawLead.email != "",
+            )
+            .order_by(RawLead.created_at.asc())
         ).all()
 
         if raw_leads:
@@ -670,7 +680,7 @@ def public_get_job_leads(job_id: str) -> list[dict[str, Any]]:
                     "businessName": rl.business_name,
                     "location": rl.location or "United Kingdom",
                     "websiteUrl": rl.website,
-                    "contactPhone": rl.phone,
+                    "contactPhone": None,
                     "contactEmail": rl.email,
                     "source": rl.source or "google_maps",
                     "notes": rl.notes or "",
@@ -685,7 +695,12 @@ def public_get_job_leads(job_id: str) -> list[dict[str, Any]]:
 
         leads = session.scalars(
             select(Lead).where(
-                and_(Lead.job_id == j_uuid, Lead.deleted_at.is_(None))
+                and_(
+                    Lead.job_id == j_uuid,
+                    Lead.deleted_at.is_(None),
+                    Lead.email.is_not(None),
+                    Lead.email != "",
+                )
             ).order_by(Lead.created_at)
         ).all()
 
@@ -703,7 +718,7 @@ def public_get_job_leads(job_id: str) -> list[dict[str, Any]]:
                 "businessName": l.business_name,
                 "location": loc_str,
                 "websiteUrl": l.website,
-                "contactPhone": l.phone,
+                "contactPhone": None,
                 "contactEmail": l.email,
                 "priorityScore": int(l.genuineness_score * 100) if l.genuineness_score else 75,
                 "genuineness": int(l.genuineness_score * 100) if l.genuineness_score is not None else 90,
@@ -826,12 +841,23 @@ def public_segregate_job(job_id: str) -> dict[str, Any]:
 
         # Get raw leads from raw_leads table or leads table
         raw_leads = session.scalars(
-            select(RawLead).where(RawLead.sheet_id == j_uuid).order_by(RawLead.created_at.asc())
+            select(RawLead).where(
+                RawLead.sheet_id == j_uuid,
+                RawLead.email.is_not(None),
+                RawLead.email != "",
+            ).order_by(RawLead.created_at.asc())
         ).all()
 
         if not raw_leads and job:
             legacy_leads = session.scalars(
-                select(Lead).where(and_(Lead.job_id == j_uuid, Lead.deleted_at.is_(None)))
+                select(Lead).where(
+                    and_(
+                        Lead.job_id == j_uuid,
+                        Lead.deleted_at.is_(None),
+                        Lead.email.is_not(None),
+                        Lead.email != "",
+                    )
+                )
             ).all()
         else:
             legacy_leads = []
@@ -876,7 +902,7 @@ def public_segregate_job(job_id: str) -> dict[str, Any]:
                     business_name=rl.business_name,
                     website=rl.website,
                     email=rl.email,
-                    phone=rl.phone,
+                    phone=None,
                     location=rl.location or f"{region}, {country}",
                     priority_score=85,
                     genuineness_score=0.95,
@@ -898,7 +924,7 @@ def public_segregate_job(job_id: str) -> dict[str, Any]:
                     business_name=ll.business_name,
                     website=ll.website,
                     email=ll.email,
-                    phone=ll.phone,
+                    phone=None,
                     location=f"{region}, {country}",
                     priority_score=int(ll.genuineness_score * 100) if ll.genuineness_score else 85,
                     genuineness_score=ll.genuineness_score or 0.95,
@@ -943,7 +969,13 @@ def public_get_sheets() -> list[dict[str, Any]]:
         result = []
         for sheet in sheets:
             leads = session.scalars(
-                select(SegregatedLead).where(SegregatedLead.sheet_id == sheet.id).order_by(SegregatedLead.lead_number.asc())
+                select(SegregatedLead)
+                .where(
+                    SegregatedLead.sheet_id == sheet.id,
+                    SegregatedLead.email.is_not(None),
+                    SegregatedLead.email != "",
+                )
+                .order_by(SegregatedLead.lead_number.asc())
             ).all()
 
             sheet_leads = []
@@ -953,7 +985,7 @@ def public_get_sheets() -> list[dict[str, Any]]:
                     "businessName": l.business_name,
                     "location": l.location or f"{sheet.region}, {sheet.country}",
                     "websiteUrl": l.website,
-                    "contactPhone": l.phone,
+                    "contactPhone": None,
                     "contactEmail": l.email,
                     "instagramHandle": l.instagram_handle,
                     "facebookHandle": l.facebook_handle,
@@ -1006,7 +1038,13 @@ def public_get_single_sheet(sheet_id: str) -> dict[str, Any]:
             raise HTTPException(status_code=404, detail="Segregated lead sheet not found")
 
         leads = session.scalars(
-            select(SegregatedLead).where(SegregatedLead.sheet_id == sheet.id).order_by(SegregatedLead.lead_number.asc())
+            select(SegregatedLead)
+            .where(
+                SegregatedLead.sheet_id == sheet.id,
+                SegregatedLead.email.is_not(None),
+                SegregatedLead.email != "",
+            )
+            .order_by(SegregatedLead.lead_number.asc())
         ).all()
 
         sheet_leads = []
@@ -1016,7 +1054,7 @@ def public_get_single_sheet(sheet_id: str) -> dict[str, Any]:
                 "businessName": l.business_name,
                 "location": l.location or f"{sheet.region}, {sheet.country}",
                 "websiteUrl": l.website,
-                "contactPhone": l.phone,
+                "contactPhone": None,
                 "contactEmail": l.email,
                 "instagramHandle": l.instagram_handle,
                 "facebookHandle": l.facebook_handle,

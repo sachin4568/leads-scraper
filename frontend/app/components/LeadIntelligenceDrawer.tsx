@@ -74,7 +74,6 @@ export function LeadIntelligenceDrawer({ lead, isOpen = true, onClose }: Props) 
 
           {/* Contact Block */}
           <Section title="Contact Information">
-            <Row label="Direct Phone" value={(lead as any).directPhone || lead.contactPhone || (lead as any).contact || 'N/A'} highlight />
             {((lead as any).email || lead.contactEmail) && <Row label="Email" value={(lead as any).email || lead.contactEmail} />}
             <Row label="Business" value={lead.businessName} />
             <Row label="Location" value={lead.location} />

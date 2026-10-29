@@ -495,7 +495,7 @@ export function TopBar() {
                       <ThreeDot historyId={item.id} activeId={activeMenuId} setActiveId={setActiveMenuId} actions={[
                         { label: 'View Details', onClick: () => setDetailItem(item) },
                         { label: 'Download Again', onClick: () => {
-                          const headers = ['Lead ID','Business','Location','Website','Phone','Priority Score','Status'];
+                          const headers = ['Lead ID','Business','Location','Website','Email','Priority Score','Status'];
                           const csv = [headers.join(',')].join('\n');
                           const blob = new Blob([csv], {type:'text/csv'});
                           const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `${item.leadName}.csv`; a.click();

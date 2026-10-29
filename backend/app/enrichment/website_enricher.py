@@ -12,6 +12,7 @@ import urllib.parse
 
 import httpx
 
+from backend.app.enrichment.email_verifier import EmailVerifier
 from backend.app.enrichment.entity_resolution import EntityResolver
 from backend.app.security.ssrf_guard import validate_outbound_url
 
@@ -48,6 +49,16 @@ SOCIAL_PATTERNS: dict[str, str] = {
 
 IGNORED_EMAIL_EXTENSIONS: set[str] = {
     "png", "jpg", "jpeg", "gif", "svg", "webp", "css", "js", "woff", "woff2", "ttf", "eot"
+}
+
+DECISION_MAKER_PREFIXES: set[str] = {
+    "founder", "ceo", "owner", "president", "director", "managing.director",
+    "co-founder", "cofounder", "principal", "chief", "head", "lead", "partner"
+}
+
+GENERIC_EMAIL_PREFIXES: set[str] = {
+    "info", "contact", "hello", "support", "help", "sales", "team", "office",
+    "general", "admin", "enquiries", "inquiries", "mail", "service", "frontdesk"
 }
 
 
@@ -191,9 +202,11 @@ class ProductionWebsiteEnricher:
         raw_hrefs = re.findall(r'<a[^>]*href=["\']([^"\']+)["\']', html, re.IGNORECASE)
         # Prioritize pages where personal and owner emails are published
         priority_keywords = [
-            "team", "our-team", "staff", "leadership", "management", "founder", "owner", 
-            "people", "meet", "doctor", "doctors", "agents", "attorneys", "bio", 
-            "about", "about-us", "contact", "contact-us", "services"
+            "founder", "owner", "leadership", "management", "team", "our-team",
+            "staff", "people", "meet", "executive", "executives", "directors",
+            "principals", "doctor", "doctors", "agents", "attorneys", "lawyers",
+            "partners", "bio", "about", "about-us", "who-we-are", "contact",
+            "contact-us", "services"
         ]
 
         candidate_links: list[tuple[int, str]] = []
@@ -211,7 +224,8 @@ class ProductionWebsiteEnricher:
             if parsed.netloc.lower() != base_domain:
                 continue
             
-            clean_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}".rstrip("/")
+            query_part = f"?{parsed.query}" if any(pg in parsed.query.lower() for pg in ("page=", "p=", "pg=")) else ""
+            clean_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}".rstrip("/") + query_part
             if clean_url in seen:
                 continue
 
@@ -236,7 +250,8 @@ class ProductionWebsiteEnricher:
                 parsed = urlparse(full_url)
                 if parsed.netloc.lower() != base_domain:
                     continue
-                clean_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}".rstrip("/")
+                query_part = f"?{parsed.query}" if any(pg in parsed.query.lower() for pg in ("page=", "p=", "pg=")) else ""
+                clean_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}".rstrip("/") + query_part
                 if clean_url in seen:
                     continue
                 seen.add(clean_url)
@@ -297,8 +312,25 @@ class ProductionWebsiteEnricher:
             "security", "orders", "order", "quote", "quotes", "estimate", "estimates",
             "inbox", "mailroom", "leads", "lead", "customercare", "helpcenter", "ops",
             "operations", "hi", "enquire", "receptionist", "reservations", "reservation",
-            "dispatch", "main", "store", "shop", "hq"
+            "dispatch", "main", "store", "shop", "hq", "founder", "cofounder", "owner",
+            "ceo", "president", "director", "principal", "partner", "chief", "proprietor",
+            "managingdirector", "generalmanager"
         }
+
+        unwanted_automated_prefixes = {
+            "noreply", "no-reply", "donotreply", "do-not-reply", "mailer-daemon",
+            "postmaster", "hostmaster", "webmaster", "privacy", "legal",
+            "compliance", "sentry", "abuse", "test", "example"
+        }
+
+        def is_unwanted_automated_email(local_p: str) -> bool:
+            clean_lp = re.sub(r"[0-9_\-\.]+$", "", local_p.lower())
+            if clean_lp in unwanted_automated_prefixes:
+                return True
+            for up in unwanted_automated_prefixes:
+                if local_p.lower() == up or local_p.lower().startswith((f"{up}.", f"{up}_", f"{up}-")):
+                    return True
+            return False
 
         def is_role_email(local_p: str) -> bool:
             clean_lp = re.sub(r"[0-9_\-\.]+$", "", local_p.lower())
@@ -310,6 +342,8 @@ class ProductionWebsiteEnricher:
             return False
 
         # 1. Email extraction (mailto + regex + obfuscation + json-ld)
+        # Strip script, style, svg, path, code, noscript tags to prevent false extractions of package versions or code snippets
+        clean_html_text = re.sub(r'<(script|style|svg|path|code|noscript)[^>]*>.*?</\1>', '', html, flags=re.DOTALL | re.IGNORECASE)
         extracted_candidates: list[str] = []
 
         # 1a. mailto: links (including URL decoded)
@@ -319,14 +353,14 @@ class ProductionWebsiteEnricher:
             if unquoted:
                 extracted_candidates.append(unquoted)
 
-        # 1b. Raw regex emails
-        raw_emails = re.findall(r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+', html)
+        # 1b. Raw regex emails (enforces strictly alphabetic TLD of 2-24 chars, blocking software versions like intl-segmenter@11.7.10)
+        raw_emails = re.findall(r'\b[a-zA-Z0-9_.+-]+@(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,24}\b', clean_html_text)
         extracted_candidates.extend(raw_emails)
 
         # 1c. Obfuscated emails: e.g. name [at] domain.com or name (at) domain.com
         obfuscated = re.findall(
-            r'([a-zA-Z0-9_.+-]+)\s*(?:\[at\]|\(at\)|&#64;|%40|\s+at\s+)\s*([a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)',
-            html,
+            r'([a-zA-Z0-9_.+-]+)\s*(?:\[at\]|\(at\)|&#64;|%40|\s+at\s+)\s*((?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,24})',
+            clean_html_text,
             re.IGNORECASE
         )
         for ob_user, ob_domain in obfuscated:
@@ -336,17 +370,34 @@ class ProductionWebsiteEnricher:
         json_lds_emails = re.findall(r'"email"\s*:\s*"([^"]+)"', html, re.IGNORECASE)
         extracted_candidates.extend(json_lds_emails)
 
-        # Score and deduplicate personal emails
-        scored_emails: list[tuple[float, str]] = []
+        # Score, categorize, and deduplicate personal & business emails
+        scored_emails: list[dict[str, Any]] = []
         seen_emails: set[str] = set()
         page_lower = page_url.lower()
 
-        # Keywords that indicate owner, executive, doctor, or direct decision maker
-        personal_context_keywords = [
-            "owner", "founder", "co-founder", "ceo", "president", "director", "partner",
-            "principal", "manager", "dr", "doctor", "physician", "attorney", "lawyer",
-            "chiropractor", "dentist", "surgeon", "consultant"
-        ]
+        # Decision-maker title mapping
+        decision_maker_titles = {
+            "founder": "Founder",
+            "co-founder": "Co-Founder",
+            "owner": "Owner",
+            "co-owner": "Co-Owner",
+            "ceo": "CEO",
+            "chief executive": "CEO",
+            "president": "President",
+            "managing director": "Managing Director",
+            "director": "Director",
+            "partner": "Partner",
+            "principal": "Principal",
+            "proprietor": "Proprietor",
+            "dr": "Doctor",
+            "doctor": "Doctor",
+            "physician": "Physician",
+            "surgeon": "Surgeon",
+            "dentist": "Dentist",
+            "attorney": "Attorney",
+            "lawyer": "Lawyer",
+            "general manager": "General Manager",
+        }
 
         for em in extracted_candidates:
             clean_em = em.strip().lower().strip(".,;:!'\"<>(){}[] \t\n\r")
@@ -362,50 +413,103 @@ class ProductionWebsiteEnricher:
                 or "schema.org" in em_domain
                 or "w3.org" in em_domain
                 or "example.com" in em_domain
+                or "placeholder" in em_domain
             )
 
-            # Strictly skip invalid, telemetry, and generic company/role emails
+            # Strictly skip invalid, telemetry, and automated no-reply emails
+            # Domain must have at least one dot and an alphabetic TLD of length 2-24
+            if "." not in em_domain:
+                continue
+            tld = em_domain.split(".")[-1]
+            if not tld.isalpha() or len(tld) < 2 or len(tld) > 24 or re.match(r"^[\d\.]+$", em_domain):
+                continue
+
             if (
                 ext in IGNORED_EMAIL_EXTENSIONS
                 or is_telemetry
-                or is_role_email(local_part)
+                or EmailVerifier.is_placeholder_email(clean_em)
+                or is_unwanted_automated_email(local_part)
                 or len(clean_em) > 100
                 or clean_em in seen_emails
-                or not re.match(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$", clean_em)
+                or not re.match(r"^[a-zA-Z0-9_.+-]+@(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,24}$", clean_em)
             ):
                 continue
 
             seen_emails.add(clean_em)
 
-            # Calculate person priority score
-            score = 10.0
-
-            # Signal 1: Page context - team, about, staff, leadership
-            if any(k in page_lower for k in ("team", "staff", "leadership", "people", "founder", "owner", "about", "bio")):
-                score += 35.0
-
-            # Signal 2: Name structure (first.last, first_last, first-last)
-            if any(sep in local_part for sep in (".", "_", "-")):
-                score += 25.0
-            elif len(local_part) >= 4 and local_part.isalpha():
-                score += 15.0
-
-            # Signal 3: Nearby HTML context mentions person/owner titles
-            em_escaped = re.escape(clean_em)
+            # Determine surrounding context in HTML
+            surrounding = ""
             match_pos = html_lower.find(clean_em)
             if match_pos != -1:
-                surrounding = html_lower[max(0, match_pos - 120): min(len(html_lower), match_pos + 120)]
-                if any(kw in surrounding for kw in personal_context_keywords):
-                    score += 40.0
+                surrounding = html_lower[max(0, match_pos - 150): min(len(html_lower), match_pos + 150)]
 
-            scored_emails.append((score, clean_em))
+            is_role = is_role_email(local_part)
+            detected_role = None
+            matched_dm_key = None
 
-        # Sort highest personal score first
-        scored_emails.sort(key=lambda x: x[0], reverse=True)
-        for _, em_val in scored_emails:
-            contacts.emails.append({"email": em_val, "source_page": page_url})
+            # Check surrounding text for decision-maker titles
+            for kw, title_val in decision_maker_titles.items():
+                if kw in surrounding:
+                    matched_dm_key = kw
+                    detected_role = title_val
+                    break
 
-        # 2. Phone extraction (tel + formatted phone regex)
+            local_name_parts = [
+                part for part in re.split(r"[._-]+", local_part)
+                if part.isalpha() and len(part) > 1
+            ]
+            named_contact = len(local_name_parts) >= 2
+
+            if detected_role and named_contact and not is_role:
+                # Priority 1: Decision-maker business email
+                priority_tier = 1
+                contact_type = "decision_maker"
+                score = 100.0
+                if matched_dm_key and matched_dm_key in ("founder", "co-founder", "owner", "ceo", "president"):
+                    score += 30.0
+                if any(sep in local_part for sep in (".", "_", "-")):
+                    score += 15.0
+            elif is_role:
+                # Priority 3: Official generic business email
+                priority_tier = 3
+                contact_type = "generic_official"
+                score = 35.0
+                detected_role = None
+            else:
+                # Priority 2: Named professional email
+                priority_tier = 2
+                contact_type = "named_professional"
+                score = 65.0
+                detected_role = "Professional Contact"
+                if any(sep in local_part for sep in (".", "_", "-")):
+                    score += 20.0
+                elif len(local_part) >= 4 and local_part.isalpha():
+                    score += 10.0
+                if any(k in page_lower for k in ("team", "staff", "people", "about", "bio")):
+                    score += 15.0
+
+            norm_type = "decision_maker" if priority_tier == 1 else ("named_professional" if priority_tier == 2 else "generic")
+            scored_emails.append({
+                "email": clean_em,
+                "source_page": page_url,
+                "source_url": page_url,
+                "priority_tier": priority_tier,
+                "priority": priority_tier,
+                "contact_type": contact_type,
+                "type": norm_type,
+                "role_or_title": detected_role,
+                "context_snippet": surrounding.strip()[:150] if surrounding else page_url,
+                "is_generic": is_role,
+                "source_backed": True,
+                "score": score,
+            })
+
+        # Sort highest priority tier first (1 > 2 > 3), then highest score
+        scored_emails.sort(key=lambda x: (x["priority_tier"], -x["score"]))
+        for em_item in scored_emails:
+            contacts.emails.append(em_item)
+
+        # 2. Phone extraction (tel + formatted phone regex) for conflict detection
         tels = re.findall(r'href=["\']tel:([^"\'\s]+)', html, re.IGNORECASE)
         seen_phones: set[str] = set()
         for p in tels:
@@ -421,7 +525,6 @@ class ProductionWebsiteEnricher:
         )
         for pm in phone_matches:
             clean_p = pm.strip()
-            # Ignore floats, coordinates, dates, or sequences containing dots
             if "." in clean_p or clean_p.startswith(("199", "200", "201", "202")):
                 continue
             digits = re.sub(r"\D", "", clean_p)
@@ -669,20 +772,36 @@ class ProductionWebsiteEnricher:
         internal_links = self._discover_internal_links(hp_res.url, hp_res.html)
         subpages_to_fetch = internal_links[: self.max_pages - 1]
 
+        # Use email map to deduplicate, upgrade, and prioritize candidates across subpages
+        email_map: dict[str, dict[str, Any]] = {c["email"]: c for c in contacts.emails}
+
         for sub_url in subpages_to_fetch:
+            # Bounded budget early exit: If a Priority 1 Decision-Maker email is already secured
+            # and we have fetched at least 2 pages, stop crawling further pages to respect the time SLA
+            has_decision_maker = any(e.get("priority_tier") == 1 for e in email_map.values())
+            if has_decision_maker and health.pages_fetched_count >= 2:
+                break
+
             sub_res = self._fetch_page(sub_url)
             health.pages_fetched_count += 1
             health.total_bytes_downloaded += len(sub_res.html.encode("utf-8"))
 
             if sub_res.status_code and sub_res.html:
                 sub_contacts = self._extract_contacts_from_html(sub_res.html, sub_res.url)
-                
-                # Merge deduplicated contacts
-                existing_emails = {c["email"] for c in contacts.emails}
+
+                # Merge and upgrade deduplicated contacts
                 for em in sub_contacts.emails:
-                    if em["email"] not in existing_emails:
-                        existing_emails.add(em["email"])
-                        contacts.emails.append(em)
+                    em_key = em["email"]
+                    if em_key not in email_map:
+                        email_map[em_key] = em
+                    else:
+                        existing = email_map[em_key]
+                        # Upgrade if discovered on a subpage with higher priority tier or higher score
+                        if (em.get("priority_tier", 3) < existing.get("priority_tier", 3)) or (
+                            em.get("priority_tier", 3) == existing.get("priority_tier", 3)
+                            and em.get("score", 0.0) > existing.get("score", 0.0)
+                        ):
+                            email_map[em_key] = em
 
                 existing_phones = {c["phone"] for c in contacts.phones}
                 for ph in sub_contacts.phones:
@@ -703,6 +822,12 @@ class ProductionWebsiteEnricher:
                 for k, v in sub_socials.items():
                     if k not in socials:
                         socials[k] = v
+
+        # Re-sort contacts.emails strictly by Priority Tier (Tier 1 > Tier 2 > Tier 3) and score
+        contacts.emails = sorted(
+            email_map.values(),
+            key=lambda x: (x.get("priority_tier", 3), -x.get("score", 0.0))
+        )
 
         # 4. Check for conflicts with provider ground truth
         conflicts: dict[str, Any] = {}

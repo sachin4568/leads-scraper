@@ -1,11 +1,13 @@
 import uuid
-import pytest
+
 import httpx
+import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
-from backend.app.models import Base as BasePhase1, ScrapeJobExecutionLog
+
+from backend.app.models import Base as BasePhase1
+from backend.app.models import ScrapeJob, ScrapeJobExecutionLog
 from backend.app.models_phase2 import Base as BasePhase2
-from backend.app.models import ScrapeJob
 from backend.app.worker import execute_single_query_plan
 
 engine = create_engine("sqlite:///:memory:")
@@ -39,6 +41,15 @@ class PermanentFailConnector:
     def search_leads(self, query, location, limit=50, page=1):
         self.call_count += 1
         raise Exception("API key is unauthorized or invalid (401)")
+
+
+class PersistentTransientFailConnector:
+    def __init__(self):
+        self.call_count = 0
+
+    def search_leads(self, query, location, limit=50, page=1):
+        self.call_count += 1
+        raise httpx.TimeoutException("Connection timed out")
 
 
 def test_transient_error_retries_and_success(monkeypatch):
@@ -116,4 +127,40 @@ def test_permanent_error_aborts_immediately(monkeypatch):
     assert len(logs) == 1
     assert "AUTH_FAILURE" in logs[0].error_reason
 
+    db.close()
+
+
+def test_transient_retries_are_bounded(monkeypatch):
+    db = SessionLocal()
+    connector = PersistentTransientFailConnector()
+    monkeypatch.setattr(
+        "backend.app.worker.get_connectors",
+        lambda: {"persistent_transient_connector": connector},
+    )
+    monkeypatch.setattr("time.sleep", lambda s: None)
+
+    job = ScrapeJob(
+        id=uuid.uuid4(),
+        workspace_id=uuid.uuid4(),
+        niche="Dentist",
+        sources=["persistent_transient_connector"],
+        state="CA",
+        target_lead_count=10,
+        status="RUNNING",
+    )
+    db.add(job)
+    db.commit()
+
+    execute_single_query_plan(
+        db,
+        job,
+        {
+            "query": "dentist",
+            "reason": "exact matching",
+            "source": "persistent_transient_connector",
+            "location": "CA",
+        },
+    )
+
+    assert connector.call_count == 3
     db.close()

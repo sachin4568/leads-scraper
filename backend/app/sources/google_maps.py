@@ -164,34 +164,14 @@ class GoogleMapsConnector(SourceConnector):
                 self.record_success()
                 return records
 
-            
             if resp.status_code == 429:
-                # Fallback for testing Phase 2 when quota is exhausted
-                if "medspa" in query.lower() or "website_dev" in query.lower():
-                    return [NormalizedLeadRecord(
-                        source=self.source_name,
-                        source_id="mock_medspa_1",
-                        business_name="Fairbanks Medical Spa",
-                        website="https://www.fairbanksmedispa.com",
-                        phone="+1 907-555-0199",
-                        address="123 Main St, Fairbanks, AK",
-                        category="Medical Spa",
-                        raw_data={}
-                    ), NormalizedLeadRecord(
-                        source=self.source_name,
-                        source_id="mock_medspa_2",
-                        business_name="Arctic Wellness",
-                        website="https://www.arcticwellness.com",
-                        phone="+1 907-555-0200",
-                        address="456 Elm St, Fairbanks, AK",
-                        category="Wellness Center",
-                        raw_data={}
-                    )]
-                return []
+                self.record_failure()
+                raise ValueError("PROVIDER_UNAVAILABLE: Google Places API rate limit or quota exceeded")
 
-            if resp.status_code in (401, 403, 429):
+            if resp.status_code in (401, 403):
                 data = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
                 err_msg = data.get("error", {}).get("message", "PROVIDER_AUTH_FAILED")
+                self.record_failure()
                 raise ValueError(f"PROVIDER_AUTH_FAILED: {err_msg}")
 
             resp.raise_for_status()
@@ -236,7 +216,7 @@ class GoogleMapsConnector(SourceConnector):
         try:
             return self._search_places_new(search_query, limit, pagination_state)
         except ValueError as val_err:
-            if "PROVIDER_AUTH_FAILED" in str(val_err):
+            if any(marker in str(val_err) for marker in ("PROVIDER_AUTH_FAILED", "PROVIDER_UNAVAILABLE")):
                 raise val_err
         except Exception as new_api_err:
             logger.info(f"Google Places (New) attempt deferred to legacy search: {new_api_err}")

@@ -105,9 +105,13 @@ class QualityGateEngine:
             return False, None
             
         raw = str(email).strip().lower()
+        from backend.app.enrichment.email_verifier import EmailVerifier
+
+        if EmailVerifier.is_placeholder_email(raw):
+            return False, None
         
         # Standard email format check
-        email_regex = r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$"
+        email_regex = r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9._-]+\.[A-Za-z]{2,}$"
         if not re.match(email_regex, raw):
             return False, None
 
@@ -195,10 +199,10 @@ class QualityGateEngine:
         target_niche: str | None = None,
         address: str | None = None,
         city: str | None = None,
-        target_location: str | None = None,
         extra_phones: list[str] | None = None,
         extra_emails: list[str] | None = None,
         extra_whatsapp_links: list[str] | None = None,
+        require_verified_email: bool = False,
     ) -> QualityGateResult:
         """
         Main deterministic evaluation gate for promoting a candidate to a production Lead.
@@ -314,6 +318,23 @@ class QualityGateEngine:
             acceptance_reasons.append(f"Direct messaging reachable on social profiles ({platforms})")
 
         # ── 3. Mandatory Quality Gate Decision ──
+        # When require_verified_email is True, candidate MUST have a verified email address
+        if require_verified_email and not has_valid_email:
+            rejection_details.append(
+                "Candidate lacks a verified direct business or owner email address (email required)."
+            )
+            return QualityGateResult(
+                decision=QualityGateDecision.REJECT,
+                is_valid=False,
+                is_contactable=False,
+                rejection_reason=RejectionReason.NO_ACTIONABLE_CONTACT_PATH,
+                rejection_details=rejection_details,
+                identity_confidence=identity_confidence,
+                contactability_score=0,
+                evidence_completeness=0.20 if (address or city) else 0.10,
+                actionability_score=0.0,
+            )
+
         # A candidate MUST have at least ONE valid actionable contact path
         is_contactable = len(contact_channels) > 0
         if not is_contactable:

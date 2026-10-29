@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_serializer
 
 
 class WorkspaceCreate(BaseModel):
@@ -39,6 +39,10 @@ class LeadRead(BaseModel):
     notes: str | None
     created_at: datetime
 
+    @field_serializer("phone")
+    def hide_phone(self, phone: str | None) -> None:
+        return None
+
 
 class ScrapeJobCreate(BaseModel):
     niche: str = Field(min_length=1, max_length=120)
@@ -46,6 +50,7 @@ class ScrapeJobCreate(BaseModel):
     region: str | None = Field(default=None, max_length=100)
     state: str | None = Field(default=None, max_length=100)
     target_lead_count: int = Field(default=100, ge=1, le=10000)
+    require_verified_email: bool = True
     sources: list[str] = Field(default_factory=lambda: ["google_maps"])
     
     # Advanced Options & Compact Configuration (Ignored on DB model insertion where unsupported)
@@ -592,4 +597,3 @@ class EnrichmentStateRead(BaseModel):
 class EvidenceRecordUpdate(BaseModel):
     evidence_type: str | None = None
     classification: str | None = None
-

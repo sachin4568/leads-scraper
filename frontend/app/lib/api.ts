@@ -4,7 +4,7 @@
  * All functions are typed and ready to swap in for mock data.
  */
 
-const BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
+const BASE = process.env.NEXT_PUBLIC_API_URL ?? '';
 
 export async function fetchWithAuth<T>(path: string, options?: RequestInit, token?: string): Promise<T> {
   const url = `${BASE}${path}`;
@@ -20,7 +20,20 @@ export async function fetchWithAuth<T>(path: string, options?: RequestInit, toke
     });
     if (!res.ok) {
       const err = await res.text();
-      throw new Error(`API ${res.status}: ${err}`);
+      let message = err || res.statusText;
+      try {
+        const body: unknown = JSON.parse(err);
+        if (body && typeof body === 'object' && 'detail' in body) {
+          const detail = body.detail;
+          message = typeof detail === 'string' ? detail : JSON.stringify(detail);
+        } else if (body && typeof body === 'object' && 'message' in body) {
+          const errorMessage = body.message;
+          message = typeof errorMessage === 'string' ? errorMessage : JSON.stringify(errorMessage);
+        }
+      } catch {
+        // Keep the original response body when it is not JSON.
+      }
+      throw new Error(`API ${res.status}: ${message}`);
     }
     if (res.status === 204) {
       return {} as T;
@@ -34,8 +47,8 @@ export async function fetchWithAuth<T>(path: string, options?: RequestInit, toke
     } catch {
       return text as unknown as T;
     }
-  } catch (networkErr) {
-    console.error('Network fetch error:', networkErr);
+  } catch (networkErr: any) {
+    console.warn(`[API] Request to ${url} failed:`, networkErr?.message || networkErr);
     throw networkErr;
   }
 }
@@ -76,6 +89,7 @@ export const api = {
     region: string;
     country?: string;
     count: number;
+    require_verified_email?: boolean;
     service: string;
     sources?: string[];
     plain_query?: string | null;
@@ -97,6 +111,7 @@ export const api = {
         country: body.country,
         service: body.service,
         target_lead_count: body.count,
+        require_verified_email: body.require_verified_email ?? false,
         sources: body.sources,
         plain_query: body.plain_query,
         exact_match: body.exact_match,

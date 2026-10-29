@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import uuid
+from io import BytesIO
+
+from openpyxl import load_workbook
 
 from backend.app.exports import leads_to_csv, leads_to_xlsx, sanitize_cell
 from backend.app.models import Lead
@@ -27,8 +30,9 @@ def test_leads_to_csv_export() -> None:
     )
     csv_data = leads_to_csv([lead])
     assert "'=Malicious Inc" in csv_data
-    assert "'+1234567890" in csv_data
     assert "https://example.com" in csv_data
+    assert "+1234567890" not in csv_data
+    assert "Phone" not in csv_data
 
 
 def test_leads_to_xlsx_export() -> None:
@@ -44,3 +48,6 @@ def test_leads_to_xlsx_export() -> None:
     xlsx_bytes = leads_to_xlsx([lead])
     assert isinstance(xlsx_bytes, bytes)
     assert len(xlsx_bytes) > 0
+    rows = list(load_workbook(BytesIO(xlsx_bytes), read_only=True).active.values)
+    assert "Phone" not in rows[0]
+    assert "123" not in {value for row in rows for value in row}

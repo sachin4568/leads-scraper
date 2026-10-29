@@ -101,7 +101,6 @@ export default function DedicatedServiceWorkspacePage() {
                     <th className="py-4 px-5">Social</th>
                     <th className="py-4 px-5">Followers</th>
                     <th className="py-4 px-5">Email</th>
-                    <th className="py-4 px-5">Phone</th>
                   </>
                 )}
 
@@ -112,7 +111,6 @@ export default function DedicatedServiceWorkspacePage() {
                     <th className="py-4 px-5">SSL</th>
                     <th className="py-4 px-5">Technical Issues</th>
                     <th className="py-4 px-5">Email</th>
-                    <th className="py-4 px-5">Phone</th>
                   </>
                 )}
 
@@ -173,7 +171,6 @@ export default function DedicatedServiceWorkspacePage() {
                         </td>
                         <td className="py-4 px-5 text-[#A1A1AA]">{l.followers || "N/A"}</td>
                         <td className="py-4 px-5 text-[#A1A1AA]">{l.email || "N/A"}</td>
-                        <td className="py-4 px-5 text-[#A1A1AA]">{l.phone || "N/A"}</td>
                       </>
                     )}
 
@@ -186,7 +183,6 @@ export default function DedicatedServiceWorkspacePage() {
                           {l.technical_issues || "Schema Gaps"}
                         </td>
                         <td className="py-4 px-5 text-[#A1A1AA]">{l.email || "N/A"}</td>
-                        <td className="py-4 px-5 text-[#A1A1AA]">{l.phone || "N/A"}</td>
                       </>
                     )}
 
@@ -197,7 +193,7 @@ export default function DedicatedServiceWorkspacePage() {
                         <td className="py-4 px-5 text-[#A1A1AA]">{l.followers || "N/A"}</td>
                         <td className="py-4 px-5 text-[#A1A1AA]">{l.activity || "Inactive"}</td>
                         <td className="py-4 px-5 text-[#A1A1AA]">{l.engagement || "1.5%"}</td>
-                        <td className="py-4 px-5 text-[#A1A1AA]">{l.phone || l.email || "N/A"}</td>
+                        <td className="py-4 px-5 text-[#A1A1AA]">{l.email || "N/A"}</td>
                       </>
                     )}
 

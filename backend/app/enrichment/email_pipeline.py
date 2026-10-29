@@ -13,6 +13,7 @@ from backend.app.models import RawLead, EnrichmentState, EvidenceRecord
 from backend.app.database import SessionLocal
 from backend.app.worker import celery_app
 from backend.app.enrichment.email_verifier import verify_email
+from backend.app.enrichment.email_verifier import EmailVerifier
 from backend.app.enrichment.website_pipeline import get_base_domain
 
 logger = logging.getLogger(__name__)
@@ -83,7 +84,11 @@ def extract_emails_from_html(html: str, url: str) -> List[Dict[str, Any]]:
 
     def add_email(raw: str, src_type: str, snippet: str):
         norm = normalize_email(raw)
-        if is_valid_email_syntax(norm) and norm not in seen:
+        if (
+            is_valid_email_syntax(norm)
+            and not EmailVerifier.is_placeholder_email(norm)
+            and norm not in seen
+        ):
             seen.add(norm)
             found.append({
                 "email": norm,
@@ -157,22 +162,20 @@ def get_prioritized_internal_links(base_url: str, html: str) -> List[str]:
 def rank_emails(emails: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     Preferred ordering:
-    1. ROLE_BASED + business-domain match
-    2. PERSONAL_BUSINESS + business-domain match
-    3. ROLE_BASED + generic provider
-    4. PERSONAL_BUSINESS + generic provider
-    5. UNKNOWN
+    1. Source-backed personal business-domain contacts
+    2. Source-backed role inboxes on the business domain
+    3. Other traceable contacts
+    4. Consumer-provider contacts
     """
     def get_rank(e: Dict[str, Any]) -> int:
         cls = e["classification"]
         dm = e["domain_match"]
-        if cls == "ROLE_BASED" and dm: return 1
-        if cls == "PERSONAL_BUSINESS" and dm: return 2
-        if cls == "ROLE_BASED" and not dm: return 3
-        if cls == "PERSONAL_BUSINESS" and not dm: return 4
-        return 5
+        if cls == "PERSONAL_BUSINESS" and dm: return 1
+        if cls == "ROLE_BASED" and dm: return 2
+        if cls == "GENERIC_PROVIDER": return 4
+        return 3
 
-    return sorted(emails, key=get_rank)
+    return sorted(emails, key=lambda email: (not bool(email.get("source_url")), get_rank(email)))
 
 def run_email_discovery(start_url: str, business_domain: str) -> Tuple[str, List[Dict[str, Any]], List[str]]:
     """Crawl bounded pages and extract emails."""
@@ -230,7 +233,7 @@ def run_email_discovery(start_url: str, business_domain: str) -> Tuple[str, List
         
     results = [
         e for e in results 
-        if e["classification"] not in ("INVALID", "ROLE_BASED")
+        if e["classification"] != "INVALID"
     ]
     
     # Add verification step
@@ -330,5 +333,4 @@ def enrich_email_pipeline(self, raw_lead_id: str, workspace_id: str):
                 db.add(evidence)
                 
         db.commit()
-
 

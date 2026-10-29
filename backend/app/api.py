@@ -98,7 +98,12 @@ def list_leads(
     return list(
         db.scalars(
             select(Lead)
-            .where(Lead.workspace_id == workspace_id, Lead.deleted_at.is_(None))
+            .where(
+                Lead.workspace_id == workspace_id,
+                Lead.deleted_at.is_(None),
+                Lead.email.is_not(None),
+                Lead.email != "",
+            )
             .order_by(Lead.created_at)
         )
     )
@@ -110,11 +115,25 @@ def create_lead(
     workspace_id: uuid.UUID = Depends(current_workspace_id),
     db: Session = Depends(get_db),
 ) -> Lead:
-    lead = Lead(workspace_id=workspace_id, **payload.model_dump())
+    _require_email_only_lead(payload.email, payload.phone)
+    lead = Lead(workspace_id=workspace_id, phone=None, **payload.model_dump(exclude={"phone"}))
     db.add(lead)
     db.commit()
     db.refresh(lead)
     return lead
+
+
+def _require_email_only_lead(email: str | None, phone: str | None) -> None:
+    if not email:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="A valid email is required; phone-only leads are not accepted.",
+        )
+    if phone:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Phone numbers are not accepted for leads; provide an email only.",
+        )
 
 
 def get_workspace_lead(lead_id: uuid.UUID, workspace_id: uuid.UUID, db: Session) -> Lead:
@@ -136,7 +155,10 @@ def update_lead(
     db: Session = Depends(get_db),
 ) -> Lead:
     lead = get_workspace_lead(lead_id, workspace_id, db)
-    for name, value in payload.model_dump(exclude_unset=True).items():
+    changes = payload.model_dump(exclude_unset=True)
+    _require_email_only_lead(changes.get("email", lead.email), changes.get("phone"))
+    changes["phone"] = None
+    for name, value in changes.items():
         setattr(lead, name, value)
     db.commit()
     db.refresh(lead)
@@ -162,7 +184,14 @@ def export_leads_csv(
     db: Session = Depends(get_db),
 ) -> Response:
     leads = list(
-        db.scalars(select(Lead).where(Lead.workspace_id == workspace_id, Lead.deleted_at.is_(None)))
+        db.scalars(
+            select(Lead).where(
+                Lead.workspace_id == workspace_id,
+                Lead.deleted_at.is_(None),
+                Lead.email.is_not(None),
+                Lead.email != "",
+            )
+        )
     )
     return Response(
         content=leads_to_csv(leads),
@@ -177,7 +206,14 @@ def export_leads_xlsx(
     db: Session = Depends(get_db),
 ) -> Response:
     leads = list(
-        db.scalars(select(Lead).where(Lead.workspace_id == workspace_id, Lead.deleted_at.is_(None)))
+        db.scalars(
+            select(Lead).where(
+                Lead.workspace_id == workspace_id,
+                Lead.deleted_at.is_(None),
+                Lead.email.is_not(None),
+                Lead.email != "",
+            )
+        )
     )
     return Response(
         content=leads_to_xlsx(leads),
@@ -216,7 +252,23 @@ def create_scrape_job(
         
     allowed_keys = {c.key for c in ScrapeJob.__table__.columns}
     job_data = {k: v for k, v in payload_dict.items() if k in allowed_keys}
-    
+
+    enrichments = job_data.get("enrichments")
+    if isinstance(enrichments, dict):
+        job_data["enrichments"] = {
+            **enrichments,
+            "require_verified_email": payload.require_verified_email,
+        }
+    elif enrichments is not None:
+        job_data["enrichments"] = {
+            "original": enrichments,
+            "require_verified_email": payload.require_verified_email,
+        }
+    else:
+        job_data["enrichments"] = {
+            "require_verified_email": payload.require_verified_email,
+        }
+
     from backend.app.models import RawLeadSheet, get_next_raw_sheet_number
     job = ScrapeJob(workspace_id=workspace_id, **job_data)
     db.add(job)
@@ -985,7 +1037,14 @@ def get_raw_leads_compat(
     db: Session = Depends(get_db),
 ) -> list[dict[str, Any]]:
     from backend.app.models import RawLead
-    raw_leads = list(db.scalars(select(RawLead).order_by(RawLead.created_at.desc()).limit(100)))
+    raw_leads = list(
+        db.scalars(
+            select(RawLead)
+            .where(RawLead.email.is_not(None), RawLead.email != "")
+            .order_by(RawLead.created_at.desc())
+            .limit(100)
+        )
+    )
     result = []
     for l in raw_leads:
         result.append({
@@ -993,11 +1052,11 @@ def get_raw_leads_compat(
             "businessName": l.business_name,
             "location": l.location or "United Kingdom",
             "niche": "General",
-            "phone": l.phone,
+            "email": l.email,
             "website": "yes" if l.website else "no",
             "source": l.source or "Google Maps",
             "scrapedAt": l.created_at.strftime("%Y-%m-%d %H:%M") if l.created_at else "2026-08-19 00:00",
-            "status": "qualified" if l.website or l.phone else "pending",
+            "status": "qualified",
         })
     return result
 
@@ -1012,7 +1071,17 @@ def get_sheets_compat(
     sheets = list(db.scalars(select(SegregatedLeadSheet).order_by(SegregatedLeadSheet.created_at.desc())).all())
     result = []
     for s in sheets:
-        leads = list(db.scalars(select(SegregatedLead).where(SegregatedLead.sheet_id == s.id).order_by(SegregatedLead.lead_number.asc())).all())
+        leads = list(
+            db.scalars(
+                select(SegregatedLead)
+                .where(
+                    SegregatedLead.sheet_id == s.id,
+                    SegregatedLead.email.is_not(None),
+                    SegregatedLead.email != "",
+                )
+                .order_by(SegregatedLead.lead_number.asc())
+            ).all()
+        )
         sheet_leads = []
         for l in leads:
             sheet_leads.append({
@@ -1020,7 +1089,7 @@ def get_sheets_compat(
                 "businessName": l.business_name,
                 "location": l.location or f"{s.region or ''}, {s.country or ''}".strip(", "),
                 "websiteUrl": l.website,
-                "contactPhone": l.phone,
+                "contactPhone": None,
                 "contactEmail": l.email,
                 "instagramHandle": l.instagram_handle,
                 "facebookHandle": l.facebook_handle,
@@ -1074,7 +1143,17 @@ def get_single_sheet_compat(
                 return matching
         raise HTTPException(status_code=404, detail="Sheet not found")
 
-    leads = list(db.scalars(select(SegregatedLead).where(SegregatedLead.sheet_id == sheet.id).order_by(SegregatedLead.lead_number.asc())).all())
+    leads = list(
+        db.scalars(
+            select(SegregatedLead)
+            .where(
+                SegregatedLead.sheet_id == sheet.id,
+                SegregatedLead.email.is_not(None),
+                SegregatedLead.email != "",
+            )
+            .order_by(SegregatedLead.lead_number.asc())
+        ).all()
+    )
     sheet_leads = []
     for l in leads:
         sheet_leads.append({
@@ -1082,7 +1161,7 @@ def get_single_sheet_compat(
             "businessName": l.business_name,
             "location": l.location or f"{sheet.region or ''}, {sheet.country or ''}".strip(", "),
             "websiteUrl": l.website,
-            "contactPhone": l.phone,
+            "contactPhone": None,
             "contactEmail": l.email,
             "instagramHandle": l.instagram_handle,
             "facebookHandle": l.facebook_handle,
@@ -1187,4 +1266,3 @@ def trigger_enrich(workspace_id: uuid.UUID, lead_id: uuid.UUID, db: Session = De
     from backend.app.enrichment.website_pipeline import enrich_website_pipeline
     enrich_website_pipeline.delay(str(lead_id), str(workspace_id))
     return {'status': 'queued'}
-

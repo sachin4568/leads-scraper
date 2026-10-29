@@ -275,7 +275,7 @@ def convert_deal_to_customer(
             lead_id=lead.id,
             company_name=lead.business_name,
             contact_email=lead.email,
-            contact_phone=lead.phone,
+            contact_phone=None,
             website=lead.website,
             status="ONBOARDING",
             lifetime_value=contract_val,

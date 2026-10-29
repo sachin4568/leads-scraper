@@ -32,7 +32,6 @@ export default function OperationsLeadsPage() {
   const [serviceFilter, setServiceFilter] = useState<string>('');
   const [workflowStatus, setWorkflowStatus] = useState<string>('');
   const [priorityQueue, setPriorityQueue] = useState<string>('');
-  const [hasPhone, setHasPhone] = useState<boolean | undefined>(undefined);
   const [hasEmail, setHasEmail] = useState<boolean | undefined>(undefined);
   const [hasWhatsApp, setHasWhatsApp] = useState<boolean | undefined>(undefined);
   const [hasSocial, setHasSocial] = useState<boolean | undefined>(undefined);
@@ -64,7 +63,6 @@ export default function OperationsLeadsPage() {
       service: serviceFilter || undefined,
       workflow_status: workflowStatus || undefined,
       priority_queue: priorityQueue || undefined,
-      has_phone: hasPhone,
       has_email: hasEmail,
       has_whatsapp: hasWhatsApp,
       has_social: hasSocial,
@@ -84,7 +82,7 @@ export default function OperationsLeadsPage() {
         setTotal(0);
         setLoading(false);
       });
-  }, [debouncedSearch, oppCategory, webStatus, serviceFilter, workflowStatus, priorityQueue, hasPhone, hasEmail, hasWhatsApp, hasSocial, sortBy, page, pageSize]);
+  }, [debouncedSearch, oppCategory, webStatus, serviceFilter, workflowStatus, priorityQueue, hasEmail, hasWhatsApp, hasSocial, sortBy, page, pageSize]);
 
   useEffect(() => {
     loadLeads();
@@ -328,7 +326,7 @@ export default function OperationsLeadsPage() {
             </svg>
             <input
               type="text"
-              placeholder="Search business, phone, email, website..."
+              placeholder="Search business, email, website..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               style={{
@@ -464,23 +462,6 @@ export default function OperationsLeadsPage() {
           
           <button
             type="button"
-            onClick={() => setHasPhone(hasPhone === true ? undefined : true)}
-            style={{
-              padding: '4px 10px',
-              borderRadius: 'var(--r-pill)',
-              fontSize: '11px',
-              fontWeight: 500,
-              border: `1px solid ${hasPhone === true ? 'var(--pink)' : 'var(--border-subtle)'}`,
-              background: hasPhone === true ? 'var(--pink-dim)' : 'transparent',
-              color: hasPhone === true ? 'var(--pink)' : 'var(--text-2)',
-              cursor: 'pointer',
-            }}
-          >
-            📞 Phone
-          </button>
-
-          <button
-            type="button"
             onClick={() => setHasEmail(hasEmail === true ? undefined : true)}
             style={{
               padding: '4px 10px',
@@ -530,7 +511,7 @@ export default function OperationsLeadsPage() {
             🌐 Social Profile
           </button>
 
-          {(oppCategory || webStatus || serviceFilter || workflowStatus || priorityQueue || hasPhone !== undefined || hasEmail !== undefined || hasWhatsApp !== undefined || hasSocial !== undefined || search) && (
+          {(oppCategory || webStatus || serviceFilter || workflowStatus || priorityQueue || hasEmail !== undefined || hasWhatsApp !== undefined || hasSocial !== undefined || search) && (
             <button
               type="button"
               onClick={() => {
@@ -540,7 +521,6 @@ export default function OperationsLeadsPage() {
                 setServiceFilter('');
                 setWorkflowStatus('');
                 setPriorityQueue('');
-                setHasPhone(undefined);
                 setHasEmail(undefined);
                 setHasWhatsApp(undefined);
                 setHasSocial(undefined);
@@ -691,7 +671,6 @@ export default function OperationsLeadsPage() {
                           ) : (
                             <span style={{ color: 'var(--text-3)' }}>No direct email</span>
                           )}
-                          {lead.phone ? <span style={{ color: 'var(--text-3)' }}>• 📞 {lead.phone}</span> : ''}
                         </div>
 
                         {/* Click-to-Execute Quick Links */}

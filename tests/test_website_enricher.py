@@ -7,6 +7,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from backend.app.database import Base
+from backend.app.enrichment.email_verifier import EmailVerificationResult
 from backend.app.enrichment.website_enricher import (
     PageFetchResult,
     ProductionWebsiteEnricher,
@@ -246,7 +247,7 @@ def test_website_failures_isolated(test_db):
         niche="restaurant",
         country="India",
         state="Mumbai",
-        target_lead_count=5,
+        target_lead_count=1,
         sources=["osm_overpass"],
         enrichments=["website"],
         status="RUNNING",
@@ -261,6 +262,7 @@ def test_website_failures_isolated(test_db):
             source_id="node/err_500_lead",
             business_name="500 Server Error Cafe",
             website="https://error500cafe.com",
+            email="info@error500cafe.com",
             phone="+91 9820001122",
             category="cafe",
             address="Mumbai",
@@ -275,6 +277,12 @@ def test_website_failures_isolated(test_db):
     plan = {"source": "osm_overpass", "query": "cafe", "reason": "test", "location": "Mumbai"}
 
     with patch("backend.app.worker.get_connectors", return_value={"osm_overpass": mock_connector}), \
+         patch(
+             "backend.app.enrichment.email_verifier.EmailVerifier.verify",
+             side_effect=lambda email, **kwargs: EmailVerificationResult(
+                 is_valid=True, email=email
+             ),
+         ), \
          patch("backend.app.enrichment.website_enricher.ProductionWebsiteEnricher._fetch_page", return_value=PageFetchResult(
              url="https://error500cafe.com", status_code=500, html="", response_time_ms=300.0,
              content_type="text/html", error="Internal Server Error"
@@ -288,6 +296,7 @@ def test_website_failures_isolated(test_db):
     assert lead is not None
     assert lead.business_name == "500 Server Error Cafe"
     assert lead.website == "https://error500cafe.com"
+    assert lead.phone is None
     assert job.leads_scraped == 1
     assert job.status in ("COMPLETED", "REGION_EXHAUSTED")
 
@@ -325,6 +334,7 @@ def test_enrichment_off_contract(test_db):
             source_id="node/off_lead",
             business_name="Enrichment Off Cafe",
             website="https://enrichmentoff.com",
+            email="info@enrichmentoff.com",
             phone="+91 9820000000",
             category="cafe",
             address="Mumbai",
@@ -339,6 +349,12 @@ def test_enrichment_off_contract(test_db):
     plan = {"source": "osm_overpass", "query": "cafe", "reason": "test", "location": "Mumbai"}
 
     with patch("backend.app.worker.get_connectors", return_value={"osm_overpass": mock_connector}), \
+         patch(
+             "backend.app.enrichment.email_verifier.EmailVerifier.verify",
+             side_effect=lambda email, **kwargs: EmailVerificationResult(
+                 is_valid=True, email=email
+             ),
+         ), \
          patch("backend.app.enrichment.website_enricher.ProductionWebsiteEnricher.enrich_website") as mock_enrich:
 
         execute_single_query_plan(session, job, plan)
@@ -348,3 +364,4 @@ def test_enrichment_off_contract(test_db):
     assert mock_enrich.call_count == 0
     lead = session.scalars(select(Lead).where(Lead.job_id == job.id)).first()
     assert lead.website == "https://enrichmentoff.com"
+    assert lead.phone is None

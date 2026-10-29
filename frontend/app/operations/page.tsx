@@ -457,10 +457,14 @@ export default function OperationsPage() {
     localStorage.setItem('lead_system_active_scrape_run', JSON.stringify({ runId: jobId }));
 
     const startTime = Date.now();
+    let pollInProgress = false;
 
     const intervalId = setInterval(async () => {
+      if (pollInProgress) return;
+      pollInProgress = true;
       try {
         const prog = await api.getScrapeProgress(jobId);
+        setScrapeError(null);
 
         // Update real stats
         setScrapeStats({
@@ -585,6 +589,11 @@ export default function OperationsPage() {
         }
       } catch (err) {
         console.error("Error polling progress", err);
+        const detail = err instanceof Error ? err.message : String(err);
+        setScrapeError(`Progress update failed: ${detail}. Retrying automatically.`);
+        setMicroStatus('Connection issue; retrying job status...');
+      } finally {
+        pollInProgress = false;
       }
     }, 1500);
 
@@ -596,108 +605,112 @@ export default function OperationsPage() {
     if (typeof window === 'undefined') return;
 
     const restoreActiveJob = async () => {
-      let targetJobId: string | null = null;
+      try {
+        let targetJobId: string | null = null;
 
-      // 1. Check localStorage first
-      const activeRunStr = localStorage.getItem('lead_system_active_scrape_run');
-      if (activeRunStr) {
+        // 1. Check localStorage first
+        const activeRunStr = localStorage.getItem('lead_system_active_scrape_run');
+        if (activeRunStr) {
+          try {
+            const parsed = JSON.parse(activeRunStr);
+            if (parsed && parsed.runId) {
+              targetJobId = parsed.runId;
+            }
+          } catch {
+            // ignore
+          }
+        }
+
+        // 2. If found in localStorage, verify with backend
+        if (targetJobId) {
+          try {
+            const prog = await api.getScrapeProgress(targetJobId);
+            if (prog && (prog.status === 'RUNNING' || prog.status === 'PENDING')) {
+              setActiveJobId(targetJobId);
+              setRunning(true);
+              setScrapeStatus('running');
+              setProgress(prog.progress_percent || 0);
+              setScrapedCount(prog.leads_scraped || 0);
+              if (prog.niche) {
+                setNiche(prog.niche);
+                setCategories([prog.niche]);
+              }
+              if (prog.city || prog.state) {
+                const loc = prog.city || prog.state;
+                setCity(loc);
+                setLocations([loc]);
+              }
+              if (prog.country) {
+                const cMatch = COUNTRIES.find(c => c.name === prog.country || c.code === prog.country || (prog.country === 'GB' && c.code === 'UK'));
+                if (cMatch) setCountry(cMatch.code);
+              }
+              if (prog.requested) {
+                setCount(prog.requested.toString());
+                if (!['10', '25', '50', '100', '200', '500'].includes(prog.requested.toString())) {
+                  setCount('custom');
+                  setCustomCount(prog.requested.toString());
+                }
+              }
+              startPollingProgress(targetJobId);
+              return;
+            } else if (prog && (prog.status === 'COMPLETED' || prog.status === 'PARTIAL' || prog.status === 'STOPPED_SAVED')) {
+              setScrapedCount(prog.leads_scraped || 0);
+              setProgress(100);
+              setScrapeStatus(prog.status.toLowerCase() as any);
+              localStorage.removeItem('lead_system_active_scrape_run');
+              loadRawSheets();
+              return;
+            } else {
+              localStorage.removeItem('lead_system_active_scrape_run');
+            }
+          } catch {
+            localStorage.removeItem('lead_system_active_scrape_run');
+          }
+        }
+
+        // 3. Fallback: Check if any recent sheet in database is currently RUNNING
         try {
-          const parsed = JSON.parse(activeRunStr);
-          if (parsed && parsed.runId) {
-            targetJobId = parsed.runId;
+          const rawList = await api.getRawLeads();
+          const now = new Date().getTime();
+          const activeSheet = (rawList as any || []).find((s: any) => {
+            if (s.status !== 'RUNNING' && s.status !== 'PENDING') return false;
+            if (!s.created_at) return true;
+            const jobTime = new Date(s.created_at).getTime();
+            return (now - jobTime) < 12 * 60 * 60 * 1000; // Only auto-restore jobs less than 12h old
+          });
+          if (activeSheet && activeSheet.id) {
+            setActiveJobId(activeSheet.id);
+            setRunning(true);
+            setScrapeStatus('running');
+            setProgress(activeSheet.progress_percent || 0);
+            setScrapedCount(activeSheet.leads_scraped || 0);
+            if (activeSheet.niche) {
+              setNiche(activeSheet.niche);
+              setCategories([activeSheet.niche]);
+            }
+            if (activeSheet.city || activeSheet.state) {
+              const loc = activeSheet.city || activeSheet.state;
+              setCity(loc);
+              setLocations([loc]);
+            }
+            if (activeSheet.country) {
+              const cMatch = COUNTRIES.find(c => c.name === activeSheet.country || c.code === activeSheet.country || (activeSheet.country === 'GB' && c.code === 'UK'));
+              if (cMatch) setCountry(cMatch.code);
+            }
+            if (activeSheet.target_lead_count) {
+              setCount(activeSheet.target_lead_count.toString());
+              if (!['10', '25', '50', '100', '200', '500'].includes(activeSheet.target_lead_count.toString())) {
+                setCount('custom');
+                setCustomCount(activeSheet.target_lead_count.toString());
+              }
+            }
+            startPollingProgress(activeSheet.id);
           }
         } catch {
           // ignore
         }
-      }
-
-      // 2. If found in localStorage, verify with backend
-      if (targetJobId) {
-        try {
-          const prog = await api.getScrapeProgress(targetJobId);
-          if (prog && (prog.status === 'RUNNING' || prog.status === 'PENDING')) {
-            setActiveJobId(targetJobId);
-            setRunning(true);
-            setScrapeStatus('running');
-            setProgress(prog.progress_percent || 0);
-            setScrapedCount(prog.leads_scraped || 0);
-            if (prog.niche) {
-              setNiche(prog.niche);
-              setCategories([prog.niche]);
-            }
-            if (prog.city || prog.state) {
-              const loc = prog.city || prog.state;
-              setCity(loc);
-              setLocations([loc]);
-            }
-            if (prog.country) {
-              const cMatch = COUNTRIES.find(c => c.name === prog.country || c.code === prog.country || (prog.country === 'GB' && c.code === 'UK'));
-              if (cMatch) setCountry(cMatch.code);
-            }
-            if (prog.requested) {
-              setCount(prog.requested.toString());
-              if (!['10', '25', '50', '100', '200', '500'].includes(prog.requested.toString())) {
-                setCount('custom');
-                setCustomCount(prog.requested.toString());
-              }
-            }
-            startPollingProgress(targetJobId);
-            return;
-          } else if (prog && (prog.status === 'COMPLETED' || prog.status === 'PARTIAL' || prog.status === 'STOPPED_SAVED')) {
-            setScrapedCount(prog.leads_scraped || 0);
-            setProgress(100);
-            setScrapeStatus(prog.status.toLowerCase() as any);
-            localStorage.removeItem('lead_system_active_scrape_run');
-            loadRawSheets();
-            return;
-          } else {
-            localStorage.removeItem('lead_system_active_scrape_run');
-          }
-        } catch {
-          localStorage.removeItem('lead_system_active_scrape_run');
-        }
-      }
-
-      // 3. Fallback: Check if any recent sheet in database is currently RUNNING
-      try {
-        const rawList = await api.getRawLeads();
-        const now = new Date().getTime();
-        const activeSheet = (rawList as any || []).find((s: any) => {
-          if (s.status !== 'RUNNING' && s.status !== 'PENDING') return false;
-          if (!s.created_at) return true;
-          const jobTime = new Date(s.created_at).getTime();
-          return (now - jobTime) < 12 * 60 * 60 * 1000; // Only auto-restore jobs less than 12h old
-        });
-        if (activeSheet && activeSheet.id) {
-          setActiveJobId(activeSheet.id);
-          setRunning(true);
-          setScrapeStatus('running');
-          setProgress(activeSheet.progress_percent || 0);
-          setScrapedCount(activeSheet.leads_scraped || 0);
-          if (activeSheet.niche) {
-            setNiche(activeSheet.niche);
-            setCategories([activeSheet.niche]);
-          }
-          if (activeSheet.city || activeSheet.state) {
-            const loc = activeSheet.city || activeSheet.state;
-            setCity(loc);
-            setLocations([loc]);
-          }
-          if (activeSheet.country) {
-            const cMatch = COUNTRIES.find(c => c.name === activeSheet.country || c.code === activeSheet.country || (activeSheet.country === 'GB' && c.code === 'UK'));
-            if (cMatch) setCountry(cMatch.code);
-          }
-          if (activeSheet.target_lead_count) {
-            setCount(activeSheet.target_lead_count.toString());
-            if (!['10', '25', '50', '100', '200', '500'].includes(activeSheet.target_lead_count.toString())) {
-              setCount('custom');
-              setCustomCount(activeSheet.target_lead_count.toString());
-            }
-          }
-          startPollingProgress(activeSheet.id);
-        }
-      } catch {
-        // ignore
+      } catch (err) {
+        console.warn('[OperationsPage] restoreActiveJob handled error:', err);
       }
     };
 
@@ -713,7 +726,7 @@ export default function OperationsPage() {
 
   const [enrichmentOptions, setEnrichmentOptions] = useState<Record<string, boolean>>({
     email: true,
-    phone: true,
+    phone: false,
     website: true,
     social: false,
     details: false
@@ -796,7 +809,9 @@ export default function OperationsPage() {
     if (c.searchDepth !== undefined) setSearchDepth(c.searchDepth);
     if (c.duplicateHandling !== undefined) setDuplicateHandling(c.duplicateHandling);
     if (c.qualityFilter !== undefined) setQualityFilter(c.qualityFilter);
-    if (c.enrichmentOptions !== undefined) setEnrichmentOptions(c.enrichmentOptions);
+    if (c.enrichmentOptions !== undefined) {
+      setEnrichmentOptions({ ...c.enrichmentOptions, email: true, phone: false });
+    }
   };
 
   const handleDeletePreset = (name: string) => {
@@ -836,7 +851,7 @@ export default function OperationsPage() {
     setSearchDepth('standard');
     setDuplicateHandling('remove');
     setQualityFilter('any');
-    setEnrichmentOptions({ email: true, phone: true, website: true, social: false, details: false });
+    setEnrichmentOptions({ email: true, phone: false, website: true, social: false, details: false });
     setShowResetConfirm(false);
   };
 
@@ -863,7 +878,9 @@ export default function OperationsPage() {
     const finalCategories = categories.length > 0 ? categories.join(', ') : niche;
     const rawNVal = plainQuery ? plainQueryValue.trim() : finalCategories.trim();
     // Clean niche: if it contains ' - ', take the first part to prevent propagation of default names
-    const nVal = rawNVal.includes(' - ') ? rawNVal.split(' - ')[0].trim() : rawNVal;
+    const nVal = plainQuery && rawNVal.includes(' - ')
+      ? rawNVal.split(' - ')[0].trim()
+      : rawNVal;
     if (!nVal) {
       errors.niche = plainQuery ? "Search query is required" : "Category selection is required";
     }
@@ -906,7 +923,8 @@ export default function OperationsPage() {
         search_depth: searchDepth,
         enrichments: Object.keys(enrichmentOptions).filter(k => enrichmentOptions[k]),
         deduplication_mode: duplicateHandling,
-        quality_threshold: qualityFilter
+        quality_threshold: qualityFilter,
+        require_verified_email: true
       });
       const res = await api.startScrape({
         niche: nVal,
@@ -924,7 +942,8 @@ export default function OperationsPage() {
         search_depth: searchDepth,
         enrichments: Object.keys(enrichmentOptions).filter(k => enrichmentOptions[k]),
         deduplication_mode: duplicateHandling,
-        quality_threshold: qualityFilter
+        quality_threshold: qualityFilter,
+        require_verified_email: true
       });
       
       const jobId = res.id || res.jobId;
@@ -1045,13 +1064,12 @@ export default function OperationsPage() {
         alert('This sheet has 0 leads to export.');
         return;
       }
-      const headers = ['Lead ID', 'Business Name', 'Location', 'Website', 'Phone', 'Email', 'Opportunity Category', 'Opportunity Score'];
+      const headers = ['Lead ID', 'Business Name', 'Location', 'Website', 'Email', 'Opportunity Category', 'Opportunity Score'];
       const rows = leads.map((l: any, idx: number) => [
         `RAW-${idx + 1}`,
         `"${(l.businessName || l.business_name || '').replace(/"/g, '""')}"`,
         `"${(l.location || '').replace(/"/g, '""')}"`,
         `"${(l.websiteUrl || l.website || '').replace(/"/g, '""')}"`,
-        `"${(l.contactPhone || l.phone || '').replace(/"/g, '""')}"`,
         `"${(l.contactEmail || l.email || '').replace(/"/g, '""')}"`,
         `"${(l.opportunity_category || '').replace(/"/g, '""')}"`,
         l.opportunity_score || ''
@@ -1952,26 +1970,9 @@ export default function OperationsPage() {
                       <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-4)', textTransform: 'uppercase', letterSpacing: '.05em' }}>Advanced Enrichment</div>
                       
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                        <label style={checkboxLabelStyle}>
-                          <input 
-                            type="checkbox" 
-                            checked={enrichmentOptions.email} 
-                            onChange={e => setEnrichmentOptions({ ...enrichmentOptions, email: e.target.checked })}
-                            style={{ accentColor: 'var(--pink)' }}
-                          />
-                          Verify Business Emails
-                          {(service === 'website_dev' || service === 'seo') && <span style={{ fontSize: '9px', color: 'var(--pink-light)', background: 'rgba(236,72,153,0.1)', padding: '1px 5px', borderRadius: 4 }}>Rec.</span>}
-                        </label>
-                        <label style={checkboxLabelStyle}>
-                          <input 
-                            type="checkbox" 
-                            checked={enrichmentOptions.phone} 
-                            onChange={e => setEnrichmentOptions({ ...enrichmentOptions, phone: e.target.checked })}
-                            style={{ accentColor: 'var(--pink)' }}
-                          />
-                          Validate Contacts Phone
-                          {service === 'website_dev' && <span style={{ fontSize: '9px', color: 'var(--pink-light)', background: 'rgba(236,72,153,0.1)', padding: '1px 5px', borderRadius: 4 }}>Rec.</span>}
-                        </label>
+                        <div style={{ fontSize: '11px', color: 'var(--text-3)' }}>
+                          Scrapes require verified business-domain emails. Phone numbers are not saved or displayed.
+                        </div>
                         <label style={checkboxLabelStyle}>
                           <input 
                             type="checkbox" 
@@ -2293,6 +2294,12 @@ export default function OperationsPage() {
                 }} />
               </div>
 
+              {scrapeStatus === 'running' && scrapeError && (
+                <div role="status" style={{ fontSize: '11px', color: 'var(--red)', marginTop: 4 }}>
+                  ⚠️ {scrapeError}
+                </div>
+              )}
+
               {/* Error messages if failed */}
               {scrapeStatus === 'failed' && scrapeError && (
                 <div style={{ fontSize: '11px', color: 'var(--red)', marginTop: 2, display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -2578,7 +2585,7 @@ export default function OperationsPage() {
                                   <span>✉</span> {emailVal}
                                 </a>
                               ) : (
-                                <span style={{ color:'var(--text-3)' }}>{l.contactPhone || 'No email found'}</span>
+                                <span style={{ color:'var(--text-3)' }}>No verified email found</span>
                               )}
                             </td>
                           </tr>
@@ -2689,4 +2696,3 @@ const inputStyle = {
   flex: 1,
   minWidth: '130px'
 };
-

@@ -14,12 +14,12 @@ def sanitize_cell(value: object | None) -> str:
 def leads_to_csv(leads: list[Lead]) -> str:
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["Business name", "Website", "Email", "Phone", "Notes"])
+    writer.writerow(["Business name", "Website", "Email", "Notes"])
     for lead in leads:
         writer.writerow(
             [
                 sanitize_cell(value)
-                for value in (lead.business_name, lead.website, lead.email, lead.phone, lead.notes)
+                for value in (lead.business_name, lead.website, lead.email, lead.notes)
             ]
         )
     return output.getvalue()
@@ -31,12 +31,12 @@ def leads_to_xlsx(leads: list[Lead]) -> bytes:
     wb = Workbook()
     ws = wb.active
     ws.title = "Leads"
-    ws.append(["Business name", "Website", "Email", "Phone", "Notes"])
+    ws.append(["Business name", "Website", "Email", "Notes"])
     for lead in leads:
         ws.append(
             [
                 sanitize_cell(value)
-                for value in (lead.business_name, lead.website, lead.email, lead.phone, lead.notes)
+                for value in (lead.business_name, lead.website, lead.email, lead.notes)
             ]
         )
     stream = io.BytesIO()

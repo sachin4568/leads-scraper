@@ -65,7 +65,7 @@ export function RawLeadsWorkspaceModal({ onClose }: Props) {
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border-subtle)', position: 'sticky', top: 0, background: 'var(--bg-elevated)' }}>
-                {['Business', 'Location', 'Niche', 'Phone', 'Website', 'Source', 'Scraped', 'Status'].map(col => (
+                {['Business', 'Location', 'Niche', 'Website', 'Source', 'Scraped', 'Status'].map(col => (
                   <th key={col} style={{
                     padding: '10px 16px', fontSize: '11px', fontWeight: 600,
                     color: 'var(--text-muted)', textTransform: 'uppercase',
@@ -83,7 +83,6 @@ export function RawLeadsWorkspaceModal({ onClose }: Props) {
                   <td style={{ padding: '12px 16px', fontWeight: 500, color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>{lead.businessName}</td>
                   <td style={{ padding: '12px 16px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>{lead.location}</td>
                   <td style={{ padding: '12px 16px', color: 'var(--text-secondary)' }}>{lead.niche}</td>
-                  <td style={{ padding: '12px 16px', color: 'var(--text-secondary)', fontSize: '12px' }}>{lead.phone || '—'}</td>
                   <td style={{ padding: '12px 16px' }}>
                     <span style={{ color: lead.website ? 'var(--green)' : 'var(--text-muted)', fontSize: '12px', fontWeight: 500 }}>
                       {lead.website ? 'Yes' : 'No'}

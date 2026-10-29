@@ -33,17 +33,25 @@ class CatBoostLightGBMScorer:
         self.load_artifact_if_exists()
 
     def load_artifact_if_exists(self) -> bool:
-        if self.artifact_path.exists():
-            try:
-                with open(self.artifact_path, "r", encoding="utf-8") as f:
-                    self.model_data = json.load(f)
-                self.is_trained = True
-                logger.info(
-                    f"[CatBoost + LightGBM] Loaded production model artifact {self.artifact_path}"
-                )
-                return True
-            except Exception as err:
-                logger.error(f"Failed loading model artifact {self.artifact_path}: {err}")
+        possible_paths = [
+            self.artifact_path,
+            Path(__file__).resolve().parent / "models" / "genuineness" / f"{self.model_version}.json",
+            Path(__file__).resolve().parents[3] / "models" / "genuineness" / f"{self.model_version}.json",
+            Path.cwd() / "models" / "genuineness" / f"{self.model_version}.json",
+        ]
+        for p in possible_paths:
+            if p.exists():
+                try:
+                    with open(p, "r", encoding="utf-8") as f:
+                        self.model_data = json.load(f)
+                    self.artifact_path = p
+                    self.is_trained = True
+                    logger.info(
+                        f"[CatBoost + LightGBM] Loaded production model artifact {self.artifact_path}"
+                    )
+                    return True
+                except Exception as err:
+                    logger.error(f"Failed loading model artifact {p}: {err}")
         return False
 
     def train_and_evaluate(self, dataset_rows: list[dict[str, Any]]) -> MLEvaluationMetrics:
